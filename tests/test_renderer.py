@@ -50,8 +50,9 @@ def test_a_frame_has_the_size_asked_for(renderer):
 
 def test_the_ball_ahead_is_at_the_centre_of_the_screen(renderer):
     rows, columns = np.nonzero(_drawn(renderer, ball=(0.0, 0.0, 150.0))[0])
-    assert len(columns) > 50
-    assert abs(columns.mean() - WIDTH / 2) < 2 and abs(rows.mean() - HEIGHT / 2) < 2
+    where = f"{len(columns)} pixels changed, rows {rows.min()}-{rows.max()}, columns {columns.min()}-{columns.max()}"
+    assert len(columns) > 50, where
+    assert abs(columns.mean() - WIDTH / 2) < 2 and abs(rows.mean() - HEIGHT / 2) < 2, where
 
 
 def test_the_screens_right_is_the_cars_right(renderer):

@@ -4,7 +4,7 @@ The arena drawn is the one the physics uses: its collision meshes, plus the floo
 walls, which RocketSim adds as planes. One light shades every face, in team colors: blue's half
 and goal at negative y, orange's at positive y. The meshes face the field, so from outside the
 arena its walls are not drawn, as in Rocket League. A frame depends on its :class:`Scene` alone,
-and is read back whole before :meth:`Renderer.draw` returns.
+and is read back whole, once OpenGL has finished it, before :meth:`Renderer.draw` returns.
 """
 
 from __future__ import annotations
@@ -141,6 +141,12 @@ class Renderer:
             self._resolved = context.framebuffer(
                 color_attachments=[context.renderbuffer((width, height), 4)])
         self.gl_renderer = context.info["GL_RENDERER"]
+        # Every shape is drawn once now, so that whatever a driver does on a shape's first draw
+        # is over before any frame is asked for.
+        cars = tuple(CarPose(team, (0.0, 0.0, 17.0), (0.0, 1.0, 0.0), (-1.0, 0.0, 0.0),
+                             (0.0, 0.0, 1.0)) for team in Team)
+        self.draw(Scene(Camera((0.0, -1000.0, 300.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0), 110.0),
+                        (0.0, 0.0, 200.0), cars, (True,) * len(self._pads)))
 
     def draw(self, scene: Scene) -> np.ndarray:
         """The frame of ``scene``: ``(height, width, 3)`` RGB bytes, top row first.
@@ -175,6 +181,7 @@ class Renderer:
                 if car.visible:
                     self._render(self._cars[car.team], _car_matrix(car))
             context.copy_framebuffer(self._resolved, self._framebuffer)
+            context.finish()
             pixels = self._resolved.read(components=3, alignment=1)
         return np.frombuffer(pixels, np.uint8).reshape(self.height, self.width, 3)[::-1].copy()
 
