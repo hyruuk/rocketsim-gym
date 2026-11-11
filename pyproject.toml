@@ -31,7 +31,8 @@ Repository = "https://github.com/hyruuk/rocketsim-gym"
 packages = ["rocketsim_gym"]
 
 [tool.setuptools.package-data]
-rocketsim_gym = ["collision_meshes/*/soccar/*.cmf", "collision_meshes/*/manifest.json"]
+rocketsim_gym = ["collision_meshes/*/soccar/*.cmf", "collision_meshes/*/manifest.json",
+                 "fonts/*.ttf", "fonts/OFL.txt"]
 
 [dependency-groups]
 dev = ["pytest", "ruff"]

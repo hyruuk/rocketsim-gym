@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.metadata
+from collections.abc import Mapping
 from typing import Any
 
 import gymnasium
@@ -12,9 +14,11 @@ from .arena_geometry import (HOMEMADE_ARENA_FOLDER, MANIFEST_FILE_NAME, collisio
                              read_collision_mesh_file, read_manifest)
 from .bot import GOAL_LINE_Y, ball_chaser
 from .camera import CameraSettings, advance_rig, camera_view, start_rig
-from .controls import (BUTTON_COUNT, NO_CONTROLS, Button, Controls, buttons_from_action,
-                       controls_from_buttons)
+from .controls import (ANALOG_HIGH, ANALOG_LOW, BUTTON_COUNT, NO_CONTROLS, Controls,
+                       ControllerSettings, InputMode, buttons_from_action, controls_from_pad,
+                       pad_from_analog, pad_from_buttons)
 from .engine import KICKOFF_SPOT_COUNT, RESPAWN_SPOT_COUNT, SoccarArena, load_rocketsim
+from .hud import HudPainter, hud_for
 from .match import TEAMS, TICKS_PER_SECOND, ArenaChanges, Match, Phase, Team, TickEvents
 from .renderer import CarPose, Renderer, Scene
 
@@ -33,6 +37,15 @@ SAMPLE_FIELDS = (
 )
 
 
+def _settings(kind, values: Mapping[str, float] | None, name: str):
+    """A player's settings of ``kind`` from ``values`` by name, the rest left at their defaults."""
+    values = dict(values or {})
+    unknown = sorted(set(values) - {field.name for field in dataclasses.fields(kind)})
+    if unknown:
+        raise ValueError(f"{name} settings {unknown}: not ones Rocket League has")
+    return kind(**values)
+
+
 class SoccarEnv(gymnasium.Env):
     """A Rocket League-style 1v1 soccar match: the agent drives the blue car, a scripted
     ball-chaser the orange one, on RocketSim physics and the homemade arena.
@@ -43,8 +56,11 @@ class SoccarEnv(gymnasium.Env):
     and respawn spots are drawn from the env's own random generator, seeded by ``reset``; the
     same seed and the same actions give the same match.
 
-    **Action**: twelve buttons, each held or not (``MultiBinary(12)``; the table is in
-    :mod:`rocketsim_gym.controls`). The car obeys them except in a countdown and while it is
+    **Action**: a game controller, by ``input_mode`` (the tables are in
+    :mod:`rocketsim_gym.controls`): ``"digital"``, twelve buttons each held or not
+    (``MultiBinary(12)``), the sticks and triggers at full deflection; or ``"analog"``, the
+    triggers and the stick as far as they are pushed and six buttons (``Box(10)``), through the
+    player's ``controller`` settings. The car obeys it except in a countdown and while it is
     demolished; ``ball_cam`` switches the camera when pressed.
 
     **Observation**: 87 values, in Rocket League's units (uu, uu/s, rad/s):
@@ -63,13 +79,19 @@ class SoccarEnv(gymnasium.Env):
 
     **Frames**: with ``render_mode="rgb_array"``, :meth:`render` returns the frame of the
     latest step, as Rocket League's camera behind the blue car sees it: car cam, or ball cam
-    (:mod:`rocketsim_gym.camera`). The camera moves in ``step``; drawing changes nothing.
+    (:mod:`rocketsim_gym.camera`), with Rocket League's on-screen display over it
+    (:mod:`rocketsim_gym.hud`). The camera moves in ``step``; drawing changes nothing.
 
     :param match_seconds: regulation time.
     :param ticks_per_step: physics ticks per step, at 120 ticks a second.
     :param render_mode: ``"rgb_array"`` to draw frames, or None.
     :param render_width: a frame's width, in pixels.
     :param render_height: a frame's height, in pixels.
+    :param camera: the player's camera settings, by the names and in the units of
+        :class:`~rocketsim_gym.camera.CameraSettings`; the ones left out keep their defaults.
+    :param input_mode: ``"digital"`` or ``"analog"``.
+    :param controller: the player's controller settings, by the names of
+        :class:`~rocketsim_gym.controls.ControllerSettings`; the ones left out keep theirs.
     :raises ValueError: an argument is out of range.
     :raises RuntimeError: frames are asked for, and no OpenGL 3.3 context opens.
     """
@@ -78,7 +100,9 @@ class SoccarEnv(gymnasium.Env):
 
     def __init__(self, match_seconds: float = 300.0, ticks_per_step: int = 2,
                  render_mode: str | None = None, render_width: int = 1024,
-                 render_height: int = 576) -> None:
+                 render_height: int = 576, camera: Mapping[str, float] | None = None,
+                 input_mode: str = "digital",
+                 controller: Mapping[str, float] | None = None) -> None:
         if (isinstance(match_seconds, bool) or not isinstance(match_seconds, (int, float))
                 or round(match_seconds * TICKS_PER_SECOND) < 1):
             raise ValueError(f"match_seconds {match_seconds!r}: a positive number of seconds, "
@@ -97,17 +121,26 @@ class SoccarEnv(gymnasium.Env):
         self._ticks_per_step = ticks_per_step
         self._collision_meshes = read_manifest(HOMEMADE_ARENA_FOLDER / MANIFEST_FILE_NAME)
         load_rocketsim(HOMEMADE_ARENA_FOLDER, self._collision_meshes)
-        self.action_space = gymnasium.spaces.MultiBinary(BUTTON_COUNT)
+        try:
+            self._input_mode = InputMode(input_mode)
+        except ValueError:
+            raise ValueError(f"input_mode {input_mode!r}: 'digital' or 'analog'") from None
+        if self._input_mode is InputMode.DIGITAL:
+            self.action_space = gymnasium.spaces.MultiBinary(BUTTON_COUNT)
+        else:
+            self.action_space = gymnasium.spaces.Box(ANALOG_LOW, ANALOG_HIGH, dtype=np.float32)
         self.observation_space = gymnasium.spaces.Box(-np.inf, np.inf, (OBSERVATION_SIZE,),
                                                       np.float32)
         self._arena: SoccarArena | None = None
-        self._camera_settings = CameraSettings()
+        self._camera_settings = _settings(CameraSettings, camera, "camera")
+        self._controller_settings = _settings(ControllerSettings, controller, "controller")
         self._renderer: Renderer | None = None
         if render_mode == "rgb_array":
             meshes = [read_collision_mesh_file(path)
                       for path in collision_mesh_files(HOMEMADE_ARENA_FOLDER)]
             self._renderer = Renderer(render_width, render_height, meshes,
                                       SoccarArena().pad_spots())
+            self._hud_painter = HudPainter(render_width, render_height)
 
     def reset(self, *, seed: int | None = None,
               options: dict[str, Any] | None = None) -> tuple[np.ndarray, dict[str, Any]]:
@@ -116,12 +149,12 @@ class SoccarEnv(gymnasium.Env):
         self._match = Match(self._match_ticks)
         self._arena.place_for_kickoff(int(self.np_random.integers(KICKOFF_SPOT_COUNT)))
         self._ball_cam = True
-        self._previous_buttons = (False,) * BUTTON_COUNT
+        self._ball_cam_held = False
         self._applied = dict.fromkeys(TEAMS, NO_CONTROLS)
         self._clear_step_events()
         car = self._arena.car(Team.BLUE)
-        self._rig = start_rig(car.rot_mat.forward.as_numpy(), car.rot_mat.up.as_numpy(),
-                              self._ball_cam)
+        self._rig = start_rig(car.pos.as_numpy(), car.rot_mat.forward.as_numpy(),
+                              car.rot_mat.up.as_numpy(), self._ball_cam)
         self._frame: np.ndarray | None = None
         return self._observation(), self._info()
 
@@ -130,11 +163,15 @@ class SoccarEnv(gymnasium.Env):
             raise ValueError("call reset before step")
         if self._match.phase is Phase.ENDED:
             raise ValueError("the match has ended: call reset")
-        buttons = buttons_from_action(action)
-        if buttons[Button.BALL_CAM] and not self._previous_buttons[Button.BALL_CAM]:
+        if self._input_mode is InputMode.DIGITAL:
+            pad = pad_from_buttons(buttons_from_action(action))
+        else:
+            pad = pad_from_analog(action)
+        if pad.ball_cam and not self._ball_cam_held:
             self._ball_cam = not self._ball_cam
-        self._previous_buttons = buttons
-        wanted = {Team.BLUE: controls_from_buttons(buttons), Team.ORANGE: self._bot_controls()}
+        self._ball_cam_held = pad.ball_cam
+        wanted = {Team.BLUE: controls_from_pad(pad, self._controller_settings),
+                  Team.ORANGE: self._bot_controls()}
         score_before = dict(self._match.score)
         self._clear_step_events()
         for _ in range(self._ticks_per_step):
@@ -161,15 +198,16 @@ class SoccarEnv(gymnasium.Env):
 
     def render(self) -> np.ndarray | None:
         """The frame of the latest ``reset`` or ``step``, ``(render_height, render_width, 3)``
-        RGB bytes, read-only; drawn once, however often it is asked for. None without a
-        render mode."""
+        RGB bytes with the on-screen display, read-only; drawn once, however often it is asked
+        for. None without a render mode."""
         if self._renderer is None:
             gymnasium.logger.warn("render_mode is None: this env draws no frame")
             return None
         if self._arena is None:
             raise ValueError("call reset before render")
         if self._frame is None:
-            self._frame = self._renderer.draw(self._scene())
+            hud = hud_for(self._match, self._arena.car(Team.BLUE).boost)
+            self._frame = self._hud_painter.paint(self._renderer.draw(self._scene()), hud)
             self._frame.flags.writeable = False
         return self._frame
 
@@ -208,6 +246,9 @@ class SoccarEnv(gymnasium.Env):
             "ticks_per_second": TICKS_PER_SECOND,
             "ticks_per_step": self._ticks_per_step,
             "gl_renderer": None if self._renderer is None else self._renderer.gl_renderer,
+            "camera": dataclasses.asdict(self._camera_settings),
+            "input_mode": self._input_mode.value,
+            "controller": dataclasses.asdict(self._controller_settings),
         }
 
     def close(self) -> None:
@@ -233,11 +274,14 @@ class SoccarEnv(gymnasium.Env):
             car = self._arena.car(team)
             cars.append(CarPose(team, car.pos.as_tuple(), car.rot_mat.forward.as_tuple(),
                                 car.rot_mat.right.as_tuple(), car.rot_mat.up.as_tuple(),
-                                visible=not car.is_demoed))
+                                visible=not car.is_demoed,
+                                boosting=self._applied[team].boost and car.boost > 0))
         camera = camera_view(self._rig, self._arena.car(Team.BLUE).pos.as_numpy(), ball,
                              self._camera_settings)
+        axes = self._arena.ball.rot_mat
         return Scene(camera, None if ball is None else tuple(ball), tuple(cars),
-                     self._arena.pads_active())
+                     self._arena.pads_active(),
+                     (axes.forward.as_tuple(), axes.right.as_tuple(), axes.up.as_tuple()))
 
     def _bot_controls(self) -> Controls:
         car = self._arena.car(Team.ORANGE)

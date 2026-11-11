@@ -6,8 +6,10 @@ import numpy as np
 import pytest
 import RocketSim as rs
 
-from rocketsim_gym.controls import (BUTTON_COUNT, Button, Controls, buttons_from_action,
-                                    controls_from_buttons)
+from rocketsim_gym.controls import (ANALOG_INPUT_COUNT, BUTTON_COUNT, AnalogInput, Button,
+                                    ControllerSettings, Controls, analog_from_buttons,
+                                    buttons_from_action, controls_from_buttons, controls_from_pad,
+                                    pad_from_analog)
 from rocketsim_gym.engine import SoccarArena
 from rocketsim_gym.match import Team
 
@@ -100,3 +102,75 @@ def test_rolling_right_tips_the_roof_to_the_right(buttons):
     before, after = _car_after(buttons, 30, airborne=True)
     assert _toward(after.rot_mat.up, before.rot_mat.right) > 0.05
     assert _toward(after.rot_mat.forward, before.rot_mat.forward) > 0.9
+
+
+def test_digital_is_analog_pushed_all_the_way_for_every_combination_of_buttons():
+    for combination in range(2 ** BUTTON_COUNT):
+        pressed = tuple(bool(combination >> index & 1) for index in range(BUTTON_COUNT))
+        assert controls_from_pad(pad_from_analog(analog_from_buttons(pressed))) \
+            == controls_from_buttons(pressed)
+
+
+def _analog(**values):
+    action = np.zeros(ANALOG_INPUT_COUNT, np.float32)
+    for name, value in values.items():
+        action[AnalogInput[name.upper()]] = value
+    return action
+
+
+def test_triggers_and_stick_count_as_far_as_they_are_pushed():
+    controls = controls_from_pad(pad_from_analog(_analog(throttle=0.4, reverse=0.1, stick_x=0.5,
+                                                         stick_y=-0.25, boost=0.7, jump=0.3)))
+    assert controls.throttle == pytest.approx(0.3) and controls.steer == pytest.approx(0.5)
+    assert controls.yaw == pytest.approx(0.5) and controls.pitch == pytest.approx(-0.25)
+    assert controls.boost and not controls.jump
+
+
+@pytest.mark.parametrize("stick, expected", [(0.1, 0.0), (-0.15, 0.0), (0.6, 0.5), (-0.6, -0.5),
+                                             (1.0, 1.0)])
+def test_the_deadzone_ignores_small_pushes_and_spreads_the_rest(stick, expected):
+    controls = controls_from_pad(pad_from_analog(_analog(stick_x=stick, stick_y=stick)),
+                                 ControllerSettings(deadzone=0.2))
+    assert (controls.steer, controls.pitch) == pytest.approx((expected, expected))
+
+
+def test_steering_sensitivity_turns_the_wheels_and_aerial_sensitivity_the_car_in_the_air():
+    settings = ControllerSettings(steering_sensitivity=2.0, aerial_sensitivity=1.5)
+    controls = controls_from_pad(pad_from_analog(_analog(stick_x=0.4, stick_y=0.5)), settings)
+    assert (controls.steer, controls.yaw, controls.pitch) == pytest.approx((0.8, 0.6, 0.75))
+    controls = controls_from_pad(pad_from_analog(_analog(stick_x=0.8)), settings)
+    assert (controls.steer, controls.yaw) == (1.0, 1.0)
+
+
+def test_powerslide_turns_the_stick_to_roll_in_analog_too():
+    controls = controls_from_pad(pad_from_analog(_analog(stick_x=0.3, powerslide=1)))
+    assert (controls.roll, controls.yaw, controls.handbrake) == (pytest.approx(0.3), 0.0, True)
+
+
+@pytest.mark.parametrize("action", [
+    np.zeros(9), np.zeros((2, 10)), _analog(throttle=-0.1), _analog(stick_x=1.5),
+    _analog(jump=2.0), _analog(stick_y=np.nan),
+])
+def test_analog_actions_out_of_range_are_refused(action):
+    with pytest.raises(ValueError):
+        pad_from_analog(action)
+
+
+@pytest.mark.parametrize("setting", [{"deadzone": 1.0}, {"deadzone": -0.1},
+                                     {"steering_sensitivity": 0.0}, {"aerial_sensitivity": 20},
+                                     {"deadzone": True}, {"steering_sensitivity": "1"}])
+def test_controller_settings_out_of_range_are_refused(setting):
+    with pytest.raises(ValueError, match=next(iter(setting))):
+        ControllerSettings(**setting)
+
+
+def test_half_throttle_drives_slower_than_full_throttle():
+    def speed_after_a_second(throttle):
+        arena = SoccarArena()
+        arena.place_for_kickoff(4)
+        arena.set_controls(Team.BLUE, Controls(throttle=throttle))
+        for _ in range(120):
+            arena.tick()
+        return np.linalg.norm(arena.car(Team.BLUE).vel.as_numpy())
+
+    assert 100 < speed_after_a_second(0.5) < speed_after_a_second(1.0) - 100

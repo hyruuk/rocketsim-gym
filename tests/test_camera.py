@@ -5,7 +5,8 @@ import math
 import numpy as np
 import pytest
 
-from rocketsim_gym.camera import CameraSettings, advance_rig, camera_view, start_rig
+from rocketsim_gym.camera import (TRANSITION_SECONDS, CameraSettings, advance_rig, camera_view,
+                                  start_rig)
 
 SETTINGS = CameraSettings()
 STEP = 1 / 60
@@ -15,34 +16,36 @@ UP = np.array([0.0, 0.0, 1.0])
 
 
 def follow(rig, seconds, car_forward=FACING_Y, car_up=UP, on_ground=True, ball=None,
-           ball_cam=False, car=CAR):
-    for _ in range(round(seconds / STEP)):
-        rig = advance_rig(rig, car, car_forward, car_up, on_ground, ball, ball_cam, STEP, SETTINGS)
+           ball_cam=False, car=CAR, settings=SETTINGS, speed=0.0):
+    for step in range(round(seconds / STEP)):
+        position = car + FACING_Y * speed * STEP * (step + 1)
+        rig = advance_rig(rig, position, car_forward, car_up, on_ground, ball, ball_cam, STEP,
+                          settings)
     return rig
 
 
 def test_car_cam_hangs_behind_and_above_the_car_looking_slightly_down():
-    camera = camera_view(start_rig(FACING_Y, UP, ball_cam=False), CAR, None, SETTINGS)
+    camera = camera_view(start_rig(CAR, FACING_Y, UP, ball_cam=False), CAR, None, SETTINGS)
     assert camera.position == pytest.approx(tuple(CAR + (0, -270, 100)))
     assert math.degrees(math.asin(camera.forward[2])) == pytest.approx(-3)
     assert np.dot(camera.forward, camera.up) == pytest.approx(0, abs=1e-12)
 
 
 def test_the_rig_turns_with_the_car():
-    rig = follow(start_rig(FACING_Y, UP, ball_cam=False), 1.0, car_forward=FACING_X)
+    rig = follow(start_rig(CAR, FACING_Y, UP, ball_cam=False), 1.0, car_forward=FACING_X)
     assert rig.forward == pytest.approx(tuple(FACING_X), abs=1e-3)
 
 
 def test_ball_cam_turns_the_rig_to_the_ball_and_back_in_a_quarter_second():
     ball = CAR + (2000, 0, 75)
-    rig = follow(start_rig(FACING_Y, UP, ball_cam=False), 1.0, ball=ball, ball_cam=True)
+    rig = follow(start_rig(CAR, FACING_Y, UP, ball_cam=False), 1.0, ball=ball, ball_cam=True)
     assert rig.ball_cam == 1 and rig.forward == pytest.approx(tuple(FACING_X), abs=1e-3)
-    rig = follow(rig, SETTINGS.transition_seconds, ball=ball, ball_cam=False)
+    rig = follow(rig, TRANSITION_SECONDS, ball=ball, ball_cam=False)
     assert rig.ball_cam == 0
 
 
 def test_ball_cam_looks_up_at_a_ball_above_the_horizon_and_keeps_the_car_in_sight():
-    rig = start_rig(FACING_Y, UP, ball_cam=True)
+    rig = start_rig(CAR, FACING_Y, UP, ball_cam=True)
     ball = CAR + (0, 1500, 700)
     camera = camera_view(rig, CAR, ball, SETTINGS)
     car_cam = camera_view(rig, CAR, None, SETTINGS)
@@ -55,16 +58,47 @@ def test_ball_cam_looks_up_at_a_ball_above_the_horizon_and_keeps_the_car_in_sigh
 
 
 def test_a_ball_out_of_play_leaves_ball_cam_on_the_car():
-    rig = start_rig(FACING_Y, UP, ball_cam=True)
+    rig = start_rig(CAR, FACING_Y, UP, ball_cam=True)
     assert camera_view(rig, CAR, None, SETTINGS) == camera_view(
-        start_rig(FACING_Y, UP, ball_cam=False), CAR, None, SETTINGS)
+        start_rig(CAR, FACING_Y, UP, ball_cam=False), CAR, None, SETTINGS)
 
 
 def test_on_a_wall_the_rig_stands_on_the_wall_and_in_the_air_it_rights_itself():
     wall_up, wall_forward = np.array([1.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0])
-    rig = follow(start_rig(FACING_Y, UP, ball_cam=False), 1.0, car_forward=wall_forward,
+    rig = follow(start_rig(CAR, FACING_Y, UP, ball_cam=False), 1.0, car_forward=wall_forward,
                  car_up=wall_up)
     assert rig.up == pytest.approx(tuple(wall_up), abs=0.01)
     assert rig.forward == pytest.approx(tuple(wall_forward), abs=0.01)
     rig = follow(rig, 4.0, car_forward=FACING_Y, car_up=wall_up, on_ground=False)
     assert rig.up == pytest.approx(tuple(UP), abs=0.01)
+
+
+def _distance_behind(stiffness):
+    """How far behind a car at supersonic speed its camera hangs, at ``stiffness``."""
+    settings = CameraSettings(stiffness=stiffness)
+    rig = follow(start_rig(CAR, FACING_Y, UP, ball_cam=False), 1.0, settings=settings,
+                 speed=2300.0)
+    car = CAR + FACING_Y * 2300.0 * 1.0
+    return float((car - np.array(camera_view(rig, car, None, settings).position)) @ FACING_Y)
+
+
+def test_below_full_stiffness_the_camera_pulls_back_at_speed():
+    assert _distance_behind(1.0) == pytest.approx(SETTINGS.distance)
+    assert SETTINGS.distance + 60 < _distance_behind(0.0) < SETTINGS.distance + 150
+
+
+def test_a_placed_car_takes_the_camera_with_it():
+    settings = CameraSettings(stiffness=0.0)
+    rig = start_rig(CAR, FACING_Y, UP, ball_cam=False)
+    kickoff = np.array([2048.0, -2560.0, 17.0])
+    rig = advance_rig(rig, kickoff, FACING_Y, UP, True, None, False, STEP, settings)
+    assert rig.anchor == pytest.approx(tuple(kickoff))
+
+
+@pytest.mark.parametrize("setting", [
+    {"field_of_view": 120}, {"distance": 50}, {"height": 250}, {"angle": 5}, {"stiffness": 1.5},
+    {"transition_speed": 0.5}, {"field_of_view": "110"}, {"angle": True},
+])
+def test_settings_outside_rocket_leagues_ranges_are_refused(setting):
+    with pytest.raises(ValueError, match=next(iter(setting))):
+        CameraSettings(**setting)

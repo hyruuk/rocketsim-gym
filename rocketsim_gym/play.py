@@ -1,9 +1,15 @@
 """Play a match against the bot in a window on this computer.
 
-    rocketsim-play [--seconds 300] [--seed N] [--width 1280] [--height 720]
+    rocketsim-play [--seconds 300] [--seed N] [--window 1280x720] [--input analog]
+                   [--deadzone 0.1] [--steering-sensitivity 1] [--aerial-sensitivity 1]
+                   [--field-of-view 110] [--distance 270] [--height 100] [--angle -3]
+                   [--stiffness 1] [--transition-speed 1]
 
 The keyboard and mouse follow Rocket League's PC defaults, and an Xbox-style controller works
-too, its triggers and left stick read as buttons:
+too. With ``--input analog``, the default, its triggers and left stick count as far as they are
+pushed, as in Rocket League; with ``--input digital`` they count as buttons, all or nothing, as
+a scanner's controller may give them. A key is always a full push. The controller and camera
+options are Rocket League's settings, in its units, so a player can bring their own.
 
 ================  ====================  ==============
 button            keyboard and mouse    controller
@@ -20,15 +26,14 @@ air roll left     Q
 air roll right    E
 ================  ====================  ==============
 
-The window's title shows the score, the clock and your boost. Esc quits; when the match is
-over, Enter plays another.
+Esc quits; when the match is over, Enter plays another.
 """
 
 from __future__ import annotations
 
 import argparse
-import math
 import os
+import sys
 import time
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
@@ -38,8 +43,11 @@ import numpy as np
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 import pygame  # noqa: E402
 from pygame._sdl2 import controller as sdl_controller  # noqa: E402
+from pygame._sdl2.video import Renderer, Texture, Window  # noqa: E402
 
-from .controls import BUTTON_COUNT, Button  # noqa: E402
+from .camera import CameraSettings  # noqa: E402
+from .controls import (BUTTON_COUNT, AnalogInput, Button, InputMode,  # noqa: E402
+                       analog_from_buttons)
 from .env import SoccarEnv  # noqa: E402
 
 #: Each key, and the buttons it holds.
@@ -113,16 +121,64 @@ def pressed_buttons(keys_held: Mapping[int, bool] | Sequence[bool], mouse_held: 
     return action
 
 
+def pad_inputs(keys_held: Mapping[int, bool] | Sequence[bool], mouse_held: Sequence[bool],
+               controller: Controller | None) -> np.ndarray:
+    """The analog action the held keys, mouse buttons and controller make: the controller's
+    triggers and stick as far as they are pushed, a key as a full push.
+
+    :param keys_held: whether each key is held, by pygame key (``pygame.key.get_pressed()``).
+    :param mouse_held: whether each mouse button is held (``pygame.mouse.get_pressed()``).
+    :param controller: the controller, if one is connected.
+    """
+    action = analog_from_buttons(pressed_buttons(keys_held, mouse_held, None))
+    if controller is None:
+        return action
+
+    def axis(sdl_axis: int) -> float:
+        return max(-1.0, min(1.0, controller.get_axis(sdl_axis) / _AXIS_MAXIMUM))
+
+    for analog, sdl_axis in ((AnalogInput.THROTTLE, pygame.CONTROLLER_AXIS_TRIGGERRIGHT),
+                             (AnalogInput.REVERSE, pygame.CONTROLLER_AXIS_TRIGGERLEFT)):
+        action[analog] = max(action[analog], axis(sdl_axis))
+    for analog, sdl_axis in ((AnalogInput.STICK_X, pygame.CONTROLLER_AXIS_LEFTX),
+                             (AnalogInput.STICK_Y, pygame.CONTROLLER_AXIS_LEFTY)):
+        if action[analog] == 0:
+            action[analog] = axis(sdl_axis)
+    for sdl_button, button in CONTROLLER_BUTTONS.items():
+        if controller.get_button(sdl_button):
+            action[AnalogInput[button.name]] = 1.0
+    return action
+
+
 def caption(sample: Mapping[str, Any]) -> str:
-    """The window's title: the score, the clock and the blue car's boost."""
-    if sample["overtime"]:
-        clock = "+" + _minutes(sample["overtime_seconds"], math.floor)
-    else:
-        clock = _minutes(sample["seconds_left"], math.ceil)
-    status = {"countdown": "get ready", "goal": "goal!",
-              "ended": "full time: Enter plays another match, Esc quits"}.get(sample["phase"], "")
-    return (f"Blue {sample['blue_score']} - {sample['orange_score']} Orange    {clock}    "
-            f"boost {sample['blue_boost']:.0f}    {status}")
+    """The window's title: what the keys do now."""
+    if sample["phase"] == "ended":
+        return "rocketsim-gym: Enter plays another match, Esc quits"
+    return "rocketsim-gym: Esc quits"
+
+
+def _open_window(width: int, height: int) -> tuple[Window, Renderer]:
+    """The game's window, showing each frame in step with the screen's refresh (vsync).
+
+    A frame shown while the screen is still drawing the one before tears the picture: its top
+    and its bottom come from two frames, out of line wherever the view turns fast.
+    """
+    window = Window("rocketsim-gym", size=(width, height))
+    try:
+        return window, Renderer(window, vsync=True)
+    except pygame.error as error:
+        print(f"rocketsim-play: no vsync on this machine ({error}); frames may tear",
+              file=sys.stderr)
+        return window, Renderer(window)
+
+
+def _window_size(text: str) -> tuple[int, int]:
+    """``WIDTHxHEIGHT``, in pixels."""
+    try:
+        width, height = (int(part) for part in text.lower().split("x"))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r}: a size such as 1280x720") from None
+    return width, height
 
 
 def _wait_for(moment: float) -> float:
@@ -139,23 +195,48 @@ def _wait_for(moment: float) -> float:
     return moment
 
 
-def _minutes(seconds: float, rounding) -> str:
-    whole = int(rounding(seconds))
-    return f"{whole // 60}:{whole % 60:02d}"
-
-
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Play a match against the bot.")
     parser.add_argument("--seconds", type=float, default=300.0, help="regulation time")
     parser.add_argument("--seed", type=int, default=None, help="seed of the kickoff spots")
-    parser.add_argument("--width", type=int, default=1280, help="window width, in pixels")
-    parser.add_argument("--height", type=int, default=720, help="window height, in pixels")
+    parser.add_argument("--window", type=_window_size, default=(1280, 720),
+                        help="window size, in pixels (default 1280x720)")
+    parser.add_argument("--input", choices=[mode.value for mode in InputMode],
+                        default=InputMode.ANALOG.value,
+                        help="analog: the controller's triggers and stick as far as they are "
+                             "pushed (default); digital: all or nothing")
+    controller = parser.add_argument_group("controller", "Rocket League's controller settings")
+    for name, default, help_text in (("deadzone", 0.1, "0 to 0.95"),
+                                     ("steering_sensitivity", 1.0, "0.1 to 10"),
+                                     ("aerial_sensitivity", 1.0, "0.1 to 10")):
+        controller.add_argument("--" + name.replace("_", "-"), type=float, dest=name,
+                                default=default, help=f"{help_text}; default {default:g}")
+    camera = parser.add_argument_group("camera", "Rocket League's camera settings")
+    defaults = CameraSettings()
+    for name, help_text in (("field_of_view", "horizontal, in degrees (60 to 110)"),
+                            ("distance", "behind the car (100 to 400)"),
+                            ("height", "above the car (40 to 200)"),
+                            ("angle", "pitch, in degrees (-15 to 0)"),
+                            ("stiffness", "0 to 1"), ("transition_speed", "1 to 2")):
+        camera.add_argument("--" + name.replace("_", "-"), type=float, dest=name,
+                            default=getattr(defaults, name),
+                            help=f"{help_text}; default {getattr(defaults, name):g}")
     arguments = parser.parse_args(argv)
-    env = SoccarEnv(match_seconds=arguments.seconds, render_mode="rgb_array",
-                    render_width=arguments.width, render_height=arguments.height)
+    width, height = arguments.window
+    settings = {name: getattr(arguments, name) for name in
+                ("field_of_view", "distance", "height", "angle", "stiffness", "transition_speed")}
+    controller_settings = {name: getattr(arguments, name)
+                           for name in ("deadzone", "steering_sensitivity", "aerial_sensitivity")}
+    try:
+        env = SoccarEnv(match_seconds=arguments.seconds, render_mode="rgb_array",
+                        render_width=width, render_height=height, camera=settings,
+                        input_mode=arguments.input, controller=controller_settings)
+    except ValueError as error:
+        parser.error(str(error))
+    read_inputs = pad_inputs if arguments.input == InputMode.ANALOG.value else pressed_buttons
     pygame.init()
     sdl_controller.init()
-    screen = pygame.display.set_mode((arguments.width, arguments.height))
+    window, renderer = _open_window(width, height)
     controller = None
     if sdl_controller.get_count() and sdl_controller.is_controller(0):
         controller = sdl_controller.Controller(0)
@@ -166,8 +247,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     try:
         while True:
             for event in pygame.event.get():
-                if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN
-                                                 and event.key == pygame.K_ESCAPE):
+                if event.type in (pygame.QUIT, pygame.WINDOWCLOSE) or (
+                        event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
                     return
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_RETURN and not playing:
                     env.reset()
@@ -176,14 +257,16 @@ def main(argv: Sequence[str] | None = None) -> None:
                         and sdl_controller.is_controller(event.device_index)):
                     controller = sdl_controller.Controller(event.device_index)
             if playing:
-                action = pressed_buttons(pygame.key.get_pressed(), pygame.mouse.get_pressed(),
-                                         controller)
+                action = read_inputs(pygame.key.get_pressed(), pygame.mouse.get_pressed(),
+                                     controller)
                 playing = not env.step(action)[2]
             frame = env.render()
-            screen.blit(pygame.image.frombuffer(frame.tobytes(), (frame.shape[1], frame.shape[0]),
-                                                "RGB"), (0, 0))
-            pygame.display.flip()
-            pygame.display.set_caption(caption(env.sample()))
+            image = pygame.image.frombuffer(frame.tobytes(), (frame.shape[1], frame.shape[0]), "RGB")
+            Texture.from_surface(renderer, image).draw()
+            renderer.present()
+            title = caption(env.sample())
+            if window.title != title:
+                window.title = title
             frame_due = _wait_for(frame_due + frame_seconds)
     finally:
         env.close()

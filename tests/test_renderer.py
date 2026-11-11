@@ -130,3 +130,29 @@ def test_a_match_draws_the_same_pixels_in_another_process():
                               env={**os.environ, "PYTHONHASHSEED": seed}).stdout
                for seed in ("1", "2")]
     assert digests[0] == digests[1] and len(digests[0].strip()) == len(hashlib.sha256().hexdigest())
+
+
+def test_a_boosting_car_trails_a_flame(renderer):
+    def car(boosting):
+        return CarPose(Team.BLUE, (0.0, -1100.0, 17.0), (0.0, 1.0, 0.0), (-1.0, 0.0, 0.0),
+                       (0.0, 0.0, 1.0), boosting=boosting)
+
+    still = renderer.draw(Scene(CAMERA, None, (car(False),), NO_PADS))
+    boosting = renderer.draw(Scene(CAMERA, None, (car(True),), NO_PADS))
+    assert (still != boosting).any(axis=2).sum() > 50
+
+
+def test_a_ball_in_the_air_casts_a_shadow_on_the_floor(renderer):
+    changed, frame = _drawn(renderer, ball=(0.0, -900.0, 600.0))
+    empty = renderer.draw(Scene(CAMERA, None, (), NO_PADS))
+    darker = changed & (frame.astype(int).sum(axis=2) < empty.astype(int).sum(axis=2) - 30)
+    rows = np.nonzero(darker)[0]
+    assert len(rows) > 100 and rows.min() > HEIGHT / 2
+
+
+def test_the_ball_turns_with_its_axes(renderer):
+    def ball(axes):
+        return renderer.draw(Scene(CAMERA, (0.0, -900.0, 150.0), (), NO_PADS, axes))
+
+    turned = ((0.0, 1.0, 0.0), (-1.0, 0.0, 0.0), (0.0, 0.0, 1.0))
+    assert not np.array_equal(ball(((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))), ball(turned))

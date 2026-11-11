@@ -96,6 +96,8 @@ class Match:
     :ivar overtime: whether the match is in overtime.
     :ivar overtime_ticks: the overtime played, in ticks.
     :ivar score: each team's goals.
+    :ivar last_goal: the team that scored last.
+    :ivar ticks_since_go: the ticks since the latest kickoff went live.
     :ivar respawn_ticks_left: each demolished car's ticks until it comes back.
     """
 
@@ -112,6 +114,8 @@ class Match:
         self.overtime = False
         self.overtime_ticks = 0
         self.score = dict.fromkeys(TEAMS, 0)
+        self.last_goal: Team | None = None
+        self.ticks_since_go = 0
         self.respawn_ticks_left: dict[Team, int] = {}
 
     @property
@@ -143,7 +147,7 @@ class Match:
                 raise ValueError(f"{events}: nothing happens in a countdown, physics is paused")
             self.phase_ticks_left -= 1
             if self.phase_ticks_left == 0:
-                self.phase = Phase.KICKOFF
+                self.phase, self.ticks_since_go = Phase.KICKOFF, 0
             return ArenaChanges()
         respawn = self._advance_respawns(events.demolished)
         if self.phase is Phase.GOAL:
@@ -154,8 +158,10 @@ class Match:
                 return self._finish()
             return self._kickoff()
         self._advance_clock(events.touched)
+        self.ticks_since_go += 1
         if events.goal is not None:
             self.score[events.goal] += 1
+            self.last_goal = events.goal
             self.phase, self.phase_ticks_left = Phase.GOAL, GOAL_PAUSE_TICKS
             return ArenaChanges(remove_ball=True, respawn=respawn)
         if (self.phase is Phase.PLAY and not self.overtime and self.clock_ticks_left == 0

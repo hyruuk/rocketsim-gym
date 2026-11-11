@@ -133,3 +133,15 @@ def test_a_kickoff_brings_every_demolished_car_back_with_it():
 def test_a_match_lasts_a_positive_whole_number_of_ticks(match_ticks):
     with pytest.raises(ValueError, match="match_ticks"):
         Match(match_ticks)
+
+
+def test_the_match_knows_who_scored_last_and_how_long_since_go():
+    match = Match(1200)
+    advance(match, COUNTDOWN_TICKS)
+    assert match.ticks_since_go == 0 and match.last_goal is None
+    advance(match, 30)
+    assert match.ticks_since_go == 30
+    match.tick(TickEvents(goal=Team.ORANGE))
+    assert match.last_goal is Team.ORANGE
+    advance(match, GOAL_PAUSE_TICKS + COUNTDOWN_TICKS)
+    assert match.ticks_since_go == 0

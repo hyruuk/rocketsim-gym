@@ -13,7 +13,7 @@ from gymnasium.utils.env_checker import check_env
 
 import rocketsim_gym  # noqa: F401  (registers RocketSimSoccar-v0)
 from rocketsim_gym.arena_geometry import HOMEMADE_ARENA_FOLDER, MANIFEST_FILE_NAME, read_manifest
-from rocketsim_gym.controls import BUTTON_COUNT, Button
+from rocketsim_gym.controls import ANALOG_HIGH, ANALOG_LOW, BUTTON_COUNT, Button, analog_from_buttons
 from rocketsim_gym.env import OBSERVATION_SIZE, SAMPLE_FIELDS, SoccarEnv
 from rocketsim_gym.match import COUNTDOWN_TICKS
 
@@ -99,12 +99,14 @@ def test_provenance_names_the_versions_and_the_meshes():
     assert provenance["collision_meshes"] == read_manifest(HOMEMADE_ARENA_FOLDER / MANIFEST_FILE_NAME)
     assert provenance["rocketsim_version"] == "2.2.1"
     assert (provenance["ticks_per_second"], provenance["ticks_per_step"]) == (120, 2)
+    assert SoccarEnv(camera={"distance": 300}).provenance()["camera"]["distance"] == 300
 
 
 @pytest.mark.parametrize("arguments", [
     {"match_seconds": 0}, {"match_seconds": -5}, {"match_seconds": True}, {"match_seconds": "300"},
     {"ticks_per_step": 0}, {"ticks_per_step": 1.5}, {"ticks_per_step": True},
     {"render_mode": "human"}, {"render_width": 0}, {"render_height": 72.5},
+    {"camera": {"field_of_view": 130}}, {"camera": {"swivel_speed": 5}},
 ])
 def test_arguments_out_of_range_are_refused(arguments):
     with pytest.raises(ValueError):
@@ -151,3 +153,44 @@ def test_a_match_replays_identically_in_another_process():
     assert runs[0] == runs[1]
     _, blue_score, orange_score = runs[0].split()
     assert int(blue_score) + int(orange_score) > 0
+
+
+@pytest.mark.filterwarnings("ignore:.*Box observation space m")
+def test_analog_mode_passes_gymnasiums_env_checker():
+    check_env(SoccarEnv(match_seconds=5, input_mode="analog"), skip_render_check=True)
+
+
+def test_analog_pushed_all_the_way_plays_the_same_match_as_digital():
+    digital, analog = SoccarEnv(), SoccarEnv(input_mode="analog")
+    observations = [digital.reset(seed=6)[0]], [analog.reset(seed=6)[0]]
+    buttons = np.random.default_rng(6).integers(0, 2, (1500, BUTTON_COUNT), dtype=np.int8)
+    for pressed in buttons:
+        observations[0].append(digital.step(pressed)[0])
+        observations[1].append(analog.step(analog_from_buttons(pressed.astype(bool)))[0])
+    assert np.array_equal(np.array(observations[0]), np.array(observations[1]))
+
+
+def test_an_analog_match_replays_identically():
+    def play():
+        env = SoccarEnv(input_mode="analog", controller={"deadzone": 0.1})
+        actions = np.random.default_rng(8)
+        observations = [env.reset(seed=8)[0]]
+        for _ in range(1500):
+            action = actions.uniform(ANALOG_LOW, ANALOG_HIGH).astype(np.float32)
+            observations.append(env.step(action)[0])
+        return np.array(observations)
+
+    assert np.array_equal(play(), play())
+
+
+@pytest.mark.parametrize("arguments", [
+    {"input_mode": "keyboard"}, {"controller": {"deadzone": 1.5}}, {"controller": {"sensitivity": 1}},
+])
+def test_input_arguments_out_of_range_are_refused(arguments):
+    with pytest.raises(ValueError):
+        SoccarEnv(**arguments)
+
+
+def test_provenance_names_the_input_mode_and_the_controller_settings():
+    provenance = SoccarEnv(input_mode="analog", controller={"deadzone": 0.15}).provenance()
+    assert provenance["input_mode"] == "analog" and provenance["controller"]["deadzone"] == 0.15

@@ -5,8 +5,8 @@ from collections import defaultdict
 import pygame
 import pytest
 
-from rocketsim_gym.controls import BUTTON_COUNT, Button
-from rocketsim_gym.play import caption, pressed_buttons
+from rocketsim_gym.controls import BUTTON_COUNT, AnalogInput, Button
+from rocketsim_gym.play import _window_size, caption, main, pad_inputs, pressed_buttons
 
 NO_MOUSE = (False, False, False)
 
@@ -58,9 +58,37 @@ def test_a_controllers_triggers_and_stick_hold_buttons_past_their_thresholds():
         Button.THROTTLE, Button.STICK_LEFT, Button.JUMP, Button.BALL_CAM}
 
 
-def test_the_title_shows_the_score_the_clock_and_the_boost():
-    sample = {"overtime": False, "overtime_seconds": 0.0, "seconds_left": 61.2, "phase": "play",
-              "blue_score": 2, "orange_score": 1, "blue_boost": 33.4}
-    assert caption(sample).split() == ["Blue", "2", "-", "1", "Orange", "1:02", "boost", "33"]
-    sample.update(overtime=True, overtime_seconds=75.9, phase="goal")
-    assert "+1:15" in caption(sample) and "goal!" in caption(sample)
+def test_the_title_says_what_the_keys_do():
+    assert caption({"phase": "play"}) == "rocketsim-gym: Esc quits"
+    assert "Enter plays another match" in caption({"phase": "ended"})
+
+
+@pytest.mark.parametrize("size, expected", [("1920x1080", (1920, 1080)), ("800X450", (800, 450))])
+def test_the_window_size_reads_width_by_height(size, expected):
+    assert _window_size(size) == expected
+
+
+def test_camera_settings_out_of_range_stop_the_window_before_it_opens(capsys):
+    with pytest.raises(SystemExit):
+        main(["--field-of-view", "130"])
+    assert "field_of_view" in capsys.readouterr().err
+
+
+def test_analog_inputs_read_the_controller_as_far_as_it_is_pushed():
+    controller = FakeController(
+        buttons=(pygame.CONTROLLER_BUTTON_A,),
+        axes={pygame.CONTROLLER_AXIS_TRIGGERRIGHT: 16384, pygame.CONTROLLER_AXIS_LEFTX: -8192,
+              pygame.CONTROLLER_AXIS_LEFTY: -32768})
+    action = pad_inputs(keys(), NO_MOUSE, controller)
+    assert action[AnalogInput.THROTTLE] == pytest.approx(0.5, abs=1e-3)
+    assert action[AnalogInput.STICK_X] == pytest.approx(-0.25, abs=1e-3)
+    assert action[AnalogInput.STICK_Y] == -1.0 and action[AnalogInput.JUMP] == 1.0
+    assert action[AnalogInput.REVERSE] == 0.0
+
+
+def test_a_held_key_is_a_full_push_over_the_stick_on_its_axis():
+    controller = FakeController(axes={pygame.CONTROLLER_AXIS_LEFTX: -30000,
+                                      pygame.CONTROLLER_AXIS_TRIGGERRIGHT: 8000})
+    action = pad_inputs(keys(pygame.K_d, pygame.K_w), NO_MOUSE, controller)
+    assert action[AnalogInput.STICK_X] == 1.0 and action[AnalogInput.THROTTLE] == 1.0
+    assert action[AnalogInput.STICK_Y] == -1.0

@@ -36,10 +36,15 @@ CAR = {Team.BLUE: (0.10, 0.38, 0.95), Team.ORANGE: (1.00, 0.48, 0.08)}
 CAR_WINDOWS = (0.05, 0.06, 0.08)
 TIRES = (0.04, 0.04, 0.04)
 BALL = (0.86, 0.86, 0.83)
-PAD_BASE = (0.22, 0.22, 0.24)
+BALL_PANEL = (0.55, 0.57, 0.62)
+BALL_SHADOW = (0.06, 0.15, 0.08)
+FLAME = {Team.BLUE: (0.45, 0.78, 1.00), Team.ORANGE: (1.00, 0.58, 0.16)}
+GOAL_FRAME = {Team.BLUE: (0.55, 0.75, 1.00), Team.ORANGE: (1.00, 0.75, 0.45)}
+PAD_BASE = (0.10, 0.22, 0.12)
 BOOST = {True: (1.00, 0.74, 0.12), False: (1.00, 0.86, 0.36)}
 
 _SIDE_WALL_X, _BACK_WALL_Y, _GOAL_BACK_Y, _CEILING_Z = 4096.0, 5120.0, 6000.0, 2044.0
+_GOAL_HALF_WIDTH, _GOAL_HEIGHT, _GOAL_FRAME_SIZE = 892.755, 642.775, 60.0
 _STRIP = 512.0
 _BALL_RADIUS = 91.25
 
@@ -78,6 +83,7 @@ class CarPose:
 
     :ivar forward, right, up: its directions, as RocketSim gives them.
     :ivar visible: False while it is demolished.
+    :ivar boosting: whether it is boosting, which shows as a flame behind it.
     """
 
     team: Team
@@ -86,6 +92,7 @@ class CarPose:
     right: tuple[float, float, float]
     up: tuple[float, float, float]
     visible: bool = True
+    boosting: bool = False
 
 
 @dataclass(frozen=True)
@@ -94,12 +101,15 @@ class Scene:
 
     :ivar ball_position: the ball, or None while it is out of play.
     :ivar pads_active: each boost pad, in the renderer's order: whether it can be picked up.
+    :ivar ball_axes: the ball's forward, right and up directions, which turn its panels.
     """
 
     camera: Camera
     ball_position: tuple[float, float, float] | None
     cars: tuple[CarPose, ...]
     pads_active: tuple[bool, ...]
+    ball_axes: tuple[tuple[float, float, float], ...] = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0),
+                                                         (0.0, 0.0, 1.0))
 
 
 class Renderer:
@@ -129,10 +139,12 @@ class Renderer:
             self._program = context.program(vertex_shader=_VERTEX_SHADER,
                                             fragment_shader=_FRAGMENT_SHADER)
             self._arena = self._vertex_array(_arena_vertices(arena_meshes))
-            self._ball = self._vertex_array(_sphere(_BALL_RADIUS, BALL, subdivisions=3))
+            self._ball = self._vertex_array(_sphere(_BALL_RADIUS, BALL, 3, BALL_PANEL))
+            self._ball_shadow = self._vertex_array(_cylinder(_BALL_RADIUS, 0.0, BALL_SHADOW))
             self._cars = {team: self._vertex_array(_car(CAR[team])) for team in Team}
+            self._flames = {team: self._vertex_array(_flame(FLAME[team])) for team in Team}
             self._pad_bases = {big: self._vertex_array(_cylinder(radius, 3.0, PAD_BASE))
-                               for big, radius in ((True, 160.0), (False, 100.0))}
+                               for big, radius in ((True, 130.0), (False, 75.0))}
             self._pad_boosts = {True: self._vertex_array(_sphere(45.0, BOOST[True], 2)),
                                 False: self._vertex_array(_cylinder(42.0, 10.0, BOOST[False]))}
             self._framebuffer = context.framebuffer(
@@ -144,7 +156,7 @@ class Renderer:
         # Every shape is drawn once now, so that whatever a driver does on a shape's first draw
         # is over before any frame is asked for.
         cars = tuple(CarPose(team, (0.0, 0.0, 17.0), (0.0, 1.0, 0.0), (-1.0, 0.0, 0.0),
-                             (0.0, 0.0, 1.0)) for team in Team)
+                             (0.0, 0.0, 1.0), boosting=True) for team in Team)
         self.draw(Scene(Camera((0.0, -1000.0, 300.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0), 110.0),
                         (0.0, 0.0, 200.0), cars, (True,) * len(self._pads)))
 
@@ -176,10 +188,15 @@ class Renderer:
                     self._render(self._pad_boosts[big], _translation(
                         position if big else (position[0], position[1], 0.0)))
             if scene.ball_position is not None:
-                self._render(self._ball, _translation(scene.ball_position))
+                x, y, _ = scene.ball_position
+                self._render(self._ball_shadow, _translation((x, y, 0.6)))
+                self._render(self._ball, _placement(scene.ball_position, *scene.ball_axes))
             for car in scene.cars:
                 if car.visible:
-                    self._render(self._cars[car.team], _car_matrix(car))
+                    model = _placement(car.position, car.forward, car.right, car.up)
+                    self._render(self._cars[car.team], model)
+                    if car.boosting:
+                        self._render(self._flames[car.team], model)
             context.copy_framebuffer(self._resolved, self._framebuffer)
             context.finish()
             pixels = self._resolved.read(components=3, alignment=1)
@@ -217,11 +234,11 @@ def _translation(position) -> np.ndarray:
     return matrix
 
 
-def _car_matrix(car: CarPose) -> np.ndarray:
-    """From the car's own axes (x forward, y right, z up) to the world."""
+def _placement(position, forward, right, up) -> np.ndarray:
+    """From a body's own axes (x forward, y right, z up) to the world."""
     matrix = np.eye(4)
-    matrix[:3, 0], matrix[:3, 1], matrix[:3, 2] = car.forward, car.right, car.up
-    matrix[:3, 3] = car.position
+    matrix[:3, 0], matrix[:3, 1], matrix[:3, 2] = forward, right, up
+    matrix[:3, 3] = position
     return matrix
 
 
@@ -295,6 +312,16 @@ def _arena_vertices(meshes: Sequence[TriangleMesh]) -> np.ndarray:
                 parts.append(_quad((x, y, 0.0), *edges, color))
     parts.append(_quad((-_SIDE_WALL_X, -20.0, 1.0), (2 * _SIDE_WALL_X, 0.0, 0.0),
                        (0.0, 40.0, 0.0), FIELD_LINE))
+    # Each goal's posts and crossbar: boxes just behind the back wall's face, so that only
+    # their halves inside the goal mouth show.
+    size = _GOAL_FRAME_SIZE
+    for team, side in ((Team.BLUE, -1.0), (Team.ORANGE, 1.0)):
+        y = side * (_BACK_WALL_Y + 1.0 + size / 2)
+        for x in (-_GOAL_HALF_WIDTH, _GOAL_HALF_WIDTH):
+            parts.append(_box((x, y, (_GOAL_HEIGHT + size / 2) / 2),
+                              (size, size, _GOAL_HEIGHT + size / 2), GOAL_FRAME[team]))
+        parts.append(_box((0.0, y, _GOAL_HEIGHT), (2 * _GOAL_HALF_WIDTH + size, size, size),
+                          GOAL_FRAME[team]))
     return np.concatenate(parts)
 
 
@@ -325,20 +352,36 @@ def _car(color) -> np.ndarray:
                            _box((-8.0, 0.0, 46.0), (56.0, 66.0, 12.0), CAR_WINDOWS), *wheels])
 
 
+def _flame(color, segments: int = 16) -> np.ndarray:
+    """A boost flame in a car's own axes: a cone out of the back of the body, pointing back."""
+    angles = np.linspace(0.0, 2 * math.pi, segments + 1)
+    radius, base_x, length, centre_z = 14.0, -46.0, 95.0, 22.0
+    ring = np.stack([np.full_like(angles, base_x), radius * np.cos(angles),
+                     centre_z + radius * np.sin(angles)], 1)
+    tip = np.array([base_x - length, 0.0, centre_z])
+    corners = np.stack([np.repeat(tip[None], segments, 0), ring[:-1], ring[1:]], 1)
+    normals = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])
+    outward = corners.mean(axis=1) - (corners.mean(axis=1)[:, 0:1] * (1, 0, 0) + (0, 0, centre_z))
+    inward = np.einsum("ij,ij->i", normals, outward) < 0
+    corners[inward] = corners[inward][:, ::-1]
+    return _flat(corners, color)
+
+
 def _cylinder(radius: float, height: float, color, segments: int = 24) -> np.ndarray:
-    """An upright cylinder standing on the origin, with its top."""
+    """An upright cylinder standing on the origin, with its top; of no height, a disc."""
     angles = np.linspace(0.0, 2 * math.pi, segments + 1)
     ring = np.stack([radius * np.cos(angles), radius * np.sin(angles), np.zeros_like(angles)], 1)
     top = ring + (0.0, 0.0, height)
     sides = [_quad(ring[i], ring[i + 1] - ring[i], top[i] - ring[i], color)
-             for i in range(segments)]
+             for i in range(segments) if height > 0]
     centre = np.array([0.0, 0.0, height])
     caps = _flat(np.stack([np.repeat(centre[None], segments, 0), top[:-1], top[1:]], 1), color)
     return np.concatenate([*sides, caps])
 
 
-def _sphere(radius: float, color, subdivisions: int) -> np.ndarray:
-    """A sphere centred on the origin, an icosahedron subdivided, its normals smooth."""
+def _sphere(radius: float, color, subdivisions: int, panel_color=None) -> np.ndarray:
+    """A sphere centred on the origin, an icosahedron subdivided, its normals smooth; with
+    ``panel_color``, every other face of the icosahedron takes that color."""
     t = (1 + 5 ** 0.5) / 2
     points = [(-1, t, 0), (1, t, 0), (-1, -t, 0), (1, -t, 0), (0, -1, t), (0, 1, t), (0, -1, -t),
               (0, 1, -t), (t, 0, -1), (t, 0, 1), (-t, 0, -1), (-t, 0, 1)]
@@ -353,7 +396,12 @@ def _sphere(radius: float, color, subdivisions: int) -> np.ndarray:
         triangles = np.concatenate([np.stack(face, 1) for face in
                                     ((a, ab, ca), (ab, b, bc), (ca, bc, c), (ab, bc, ca))])
     normals = triangles.reshape(-1, 3)
-    colors = np.broadcast_to(np.asarray(color, float), normals.shape)
+    colors = np.tile(np.asarray(color, float), (len(triangles), 1))
+    if panel_color is not None:
+        # Each subdivision lists its triangles' children a whole round apart, so a
+        # triangle's index modulo 20 is the icosahedron face it came from.
+        colors[np.arange(len(triangles)) % 20 % 2 == 1] = panel_color
+    colors = np.repeat(colors, 3, axis=0)
     return np.concatenate([normals * radius, normals, colors], axis=1)
 
 
