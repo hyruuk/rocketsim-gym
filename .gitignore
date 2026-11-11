@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Rocket League's own collision meshes, dumped on a PC with the game, are never committed:
+# no mesh file is, but the homemade arena's.
+*.cmf
+!rocketsim_gym/collision_meshes/homemade/soccar/arena.cmf
