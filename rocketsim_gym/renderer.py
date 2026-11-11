@@ -189,7 +189,8 @@ class Renderer:
                         position if big else (position[0], position[1], 0.0)))
             if scene.ball_position is not None:
                 x, y, _ = scene.ball_position
-                self._render(self._ball_shadow, _translation((x, y, 0.6)))
+                # Just above the floor and its centre line.
+                self._render(self._ball_shadow, _translation((x, y, 1.6)))
                 self._render(self._ball, _placement(scene.ball_position, *scene.ball_axes))
             for car in scene.cars:
                 if car.visible:
