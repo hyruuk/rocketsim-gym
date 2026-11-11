@@ -17,7 +17,12 @@ dependencies = [
     # RocketSim ships wheels only, for these platforms; on a Mac it needs macOS 14 or later.
     "rocketsim==2.2.1; (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')) or (sys_platform == 'win32' and platform_machine == 'AMD64')",
     "moderngl",
+    # The play window (rocketsim-play).
+    "pygame-ce",
 ]
+
+[project.scripts]
+rocketsim-play = "rocketsim_gym.play:main"
 
 [project.urls]
 Repository = "https://github.com/hyruuk/rocketsim-gym"

@@ -19,6 +19,13 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+      - name: OpenGL without a display (Mesa's EGL), for the frames
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libegl1 libegl-mesa0 libgl1-mesa-dri
       - run: uv sync
       - run: uv run ruff check .
       - run: uv run pytest
+      - name: The play command installs and starts, as the README's get-started gives it
+        run: uvx --from . rocketsim-play --help

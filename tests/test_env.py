@@ -104,7 +104,7 @@ def test_provenance_names_the_versions_and_the_meshes():
 @pytest.mark.parametrize("arguments", [
     {"match_seconds": 0}, {"match_seconds": -5}, {"match_seconds": True}, {"match_seconds": "300"},
     {"ticks_per_step": 0}, {"ticks_per_step": 1.5}, {"ticks_per_step": True},
-    {"render_mode": "rgb_array"},
+    {"render_mode": "human"}, {"render_width": 0}, {"render_height": 72.5},
 ])
 def test_arguments_out_of_range_are_refused(arguments):
     with pytest.raises(ValueError):

@@ -8,12 +8,15 @@ from typing import Any
 import gymnasium
 import numpy as np
 
-from .arena_geometry import HOMEMADE_ARENA_FOLDER, MANIFEST_FILE_NAME, read_manifest
+from .arena_geometry import (HOMEMADE_ARENA_FOLDER, MANIFEST_FILE_NAME, collision_mesh_files,
+                             read_collision_mesh_file, read_manifest)
 from .bot import GOAL_LINE_Y, ball_chaser
+from .camera import CameraSettings, advance_rig, camera_view, start_rig
 from .controls import (BUTTON_COUNT, NO_CONTROLS, Button, Controls, buttons_from_action,
                        controls_from_buttons)
 from .engine import KICKOFF_SPOT_COUNT, RESPAWN_SPOT_COUNT, SoccarArena, load_rocketsim
 from .match import TEAMS, TICKS_PER_SECOND, ArenaChanges, Match, Phase, Team, TickEvents
+from .renderer import CarPose, Renderer, Scene
 
 #: The number of values in an observation.
 OBSERVATION_SIZE = 87
@@ -58,16 +61,24 @@ class SoccarEnv(gymnasium.Env):
     **Reward**: +1 for each blue goal, -1 for each orange goal. The episode terminates when
     the match ends; overtime has no end but a goal.
 
+    **Frames**: with ``render_mode="rgb_array"``, :meth:`render` returns the frame of the
+    latest step, as Rocket League's camera behind the blue car sees it: car cam, or ball cam
+    (:mod:`rocketsim_gym.camera`). The camera moves in ``step``; drawing changes nothing.
+
     :param match_seconds: regulation time.
     :param ticks_per_step: physics ticks per step, at 120 ticks a second.
-    :param render_mode: none: the env does not draw.
+    :param render_mode: ``"rgb_array"`` to draw frames, or None.
+    :param render_width: a frame's width, in pixels.
+    :param render_height: a frame's height, in pixels.
     :raises ValueError: an argument is out of range.
+    :raises RuntimeError: frames are asked for, and no OpenGL 3.3 context opens.
     """
 
-    metadata = {"render_modes": []}
+    metadata = {"render_modes": ["rgb_array"]}
 
     def __init__(self, match_seconds: float = 300.0, ticks_per_step: int = 2,
-                 render_mode: str | None = None) -> None:
+                 render_mode: str | None = None, render_width: int = 1024,
+                 render_height: int = 576) -> None:
         if (isinstance(match_seconds, bool) or not isinstance(match_seconds, (int, float))
                 or round(match_seconds * TICKS_PER_SECOND) < 1):
             raise ValueError(f"match_seconds {match_seconds!r}: a positive number of seconds, "
@@ -75,8 +86,11 @@ class SoccarEnv(gymnasium.Env):
         if isinstance(ticks_per_step, bool) or not isinstance(ticks_per_step, int) \
                 or ticks_per_step < 1:
             raise ValueError(f"ticks_per_step {ticks_per_step!r}: a positive whole number")
-        if render_mode is not None:
-            raise ValueError(f"render_mode {render_mode!r}: this env does not draw")
+        if render_mode not in (None, "rgb_array"):
+            raise ValueError(f"render_mode {render_mode!r}: None or 'rgb_array'")
+        for name, size in (("render_width", render_width), ("render_height", render_height)):
+            if isinstance(size, bool) or not isinstance(size, int) or size < 1:
+                raise ValueError(f"{name} {size!r}: a positive whole number of pixels")
         self.render_mode = render_mode
         self.metadata = {**self.metadata, "render_fps": TICKS_PER_SECOND / ticks_per_step}
         self._match_ticks = round(match_seconds * TICKS_PER_SECOND)
@@ -87,6 +101,13 @@ class SoccarEnv(gymnasium.Env):
         self.observation_space = gymnasium.spaces.Box(-np.inf, np.inf, (OBSERVATION_SIZE,),
                                                       np.float32)
         self._arena: SoccarArena | None = None
+        self._camera_settings = CameraSettings()
+        self._renderer: Renderer | None = None
+        if render_mode == "rgb_array":
+            meshes = [read_collision_mesh_file(path)
+                      for path in collision_mesh_files(HOMEMADE_ARENA_FOLDER)]
+            self._renderer = Renderer(render_width, render_height, meshes,
+                                      SoccarArena().pad_spots())
 
     def reset(self, *, seed: int | None = None,
               options: dict[str, Any] | None = None) -> tuple[np.ndarray, dict[str, Any]]:
@@ -98,6 +119,10 @@ class SoccarEnv(gymnasium.Env):
         self._previous_buttons = (False,) * BUTTON_COUNT
         self._applied = dict.fromkeys(TEAMS, NO_CONTROLS)
         self._clear_step_events()
+        car = self._arena.car(Team.BLUE)
+        self._rig = start_rig(car.rot_mat.forward.as_numpy(), car.rot_mat.up.as_numpy(),
+                              self._ball_cam)
+        self._frame: np.ndarray | None = None
         return self._observation(), self._info()
 
     def step(self, action: Any) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
@@ -127,10 +152,26 @@ class SoccarEnv(gymnasium.Env):
             scores = dict(self._match.score)
             self._apply(self._match.tick(events))
             self._record(events, scores)
+        self._advance_camera(self._ticks_per_step / TICKS_PER_SECOND)
+        self._frame = None
         reward = (self._match.score[Team.BLUE] - score_before[Team.BLUE]
                   - (self._match.score[Team.ORANGE] - score_before[Team.ORANGE]))
         terminated = self._match.phase is Phase.ENDED
         return self._observation(), float(reward), terminated, False, self._info()
+
+    def render(self) -> np.ndarray | None:
+        """The frame of the latest ``reset`` or ``step``, ``(render_height, render_width, 3)``
+        RGB bytes, read-only; drawn once, however often it is asked for. None without a
+        render mode."""
+        if self._renderer is None:
+            gymnasium.logger.warn("render_mode is None: this env draws no frame")
+            return None
+        if self._arena is None:
+            raise ValueError("call reset before render")
+        if self._frame is None:
+            self._frame = self._renderer.draw(self._scene())
+            self._frame.flags.writeable = False
+        return self._frame
 
     def sample(self) -> dict[str, Any]:
         """The state to log for analysis, after the latest ``reset`` or ``step``: each of
@@ -166,10 +207,37 @@ class SoccarEnv(gymnasium.Env):
             "collision_meshes": dict(self._collision_meshes),
             "ticks_per_second": TICKS_PER_SECOND,
             "ticks_per_step": self._ticks_per_step,
+            "gl_renderer": None if self._renderer is None else self._renderer.gl_renderer,
         }
 
     def close(self) -> None:
+        if self._renderer is not None:
+            self._renderer.close()
+            self._renderer = None
         self._arena = None
+
+    def _ball_in_play(self) -> np.ndarray | None:
+        """The ball's position, or None while it is out of play after a goal."""
+        return None if self._match.phase is Phase.GOAL else self._arena.ball.pos.as_numpy()
+
+    def _advance_camera(self, seconds: float) -> None:
+        car = self._arena.car(Team.BLUE)
+        self._rig = advance_rig(self._rig, car.pos.as_numpy(), car.rot_mat.forward.as_numpy(),
+                                car.rot_mat.up.as_numpy(), car.is_on_ground, self._ball_in_play(),
+                                self._ball_cam, seconds, self._camera_settings)
+
+    def _scene(self) -> Scene:
+        ball = self._ball_in_play()
+        cars = []
+        for team in TEAMS:
+            car = self._arena.car(team)
+            cars.append(CarPose(team, car.pos.as_tuple(), car.rot_mat.forward.as_tuple(),
+                                car.rot_mat.right.as_tuple(), car.rot_mat.up.as_tuple(),
+                                visible=not car.is_demoed))
+        camera = camera_view(self._rig, self._arena.car(Team.BLUE).pos.as_numpy(), ball,
+                             self._camera_settings)
+        return Scene(camera, None if ball is None else tuple(ball), tuple(cars),
+                     self._arena.pads_active())
 
     def _bot_controls(self) -> Controls:
         car = self._arena.car(Team.ORANGE)

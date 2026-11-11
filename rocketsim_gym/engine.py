@@ -126,6 +126,10 @@ class SoccarArena:
         """For each boost pad, in RocketSim's order, whether it can be picked up."""
         return tuple(pad.get_state().is_active for pad in self._pads)
 
+    def pad_spots(self) -> tuple[tuple[tuple[float, float, float], bool], ...]:
+        """Each boost pad's position (uu) and whether it is big, in RocketSim's order."""
+        return tuple((pad.get_pos().as_tuple(), pad.is_big) for pad in self._pads)
+
     def place_for_kickoff(self, spot: int) -> None:
         """Set up a kickoff: both cars at kickoff spot ``spot`` (mirrored for orange) with the
         spawn boost, the ball at rest at the centre, and every boost pad up."""
