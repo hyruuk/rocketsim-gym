@@ -6,16 +6,10 @@ import math
 
 import numpy as np
 import pytest
+import RocketSim as rs
 
 from rocketsim_gym.arena_geometry import HOMEMADE_ARENA_FOLDER, MANIFEST_FILE_NAME, read_manifest
 from rocketsim_gym.engine import check_collision_meshes_folder, load_rocketsim, new_soccar_arena
-
-rs = pytest.importorskip("RocketSim")
-
-
-@pytest.fixture(scope="module", autouse=True)
-def homemade_arena_loaded():
-    load_rocketsim(HOMEMADE_ARENA_FOLDER, read_manifest(HOMEMADE_ARENA_FOLDER / MANIFEST_FILE_NAME))
 
 
 def _car(arena, position, yaw=0.0, boost=100.0):
