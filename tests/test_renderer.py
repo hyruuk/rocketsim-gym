@@ -43,13 +43,22 @@ def _drawn(renderer, ball=None, cars=()):
     return (frame != empty).any(axis=2), frame
 
 
+def _around(changed, row, column, reach=30):
+    """``changed`` within ``reach`` pixels of ``(row, column)``. GitHub's macOS runner, a
+    virtual machine, also changes a few pixels of the ceiling when it draws the ball."""
+    around = np.zeros_like(changed)
+    around[max(0, row - reach):row + reach + 1, max(0, column - reach):column + reach + 1] = True
+    return changed & around
+
+
 def test_a_frame_has_the_size_asked_for(renderer):
     frame = renderer.draw(Scene(CAMERA, None, (), NO_PADS))
     assert frame.shape == (HEIGHT, WIDTH, 3) and frame.dtype == np.uint8
 
 
 def test_the_ball_ahead_is_at_the_centre_of_the_screen(renderer):
-    rows, columns = np.nonzero(_drawn(renderer, ball=(0.0, 0.0, 150.0))[0])
+    changed = _drawn(renderer, ball=(0.0, 0.0, 150.0))[0]
+    rows, columns = np.nonzero(_around(changed, HEIGHT // 2, WIDTH // 2))
     where = f"{len(columns)} pixels changed, rows {rows.min()}-{rows.max()}, columns {columns.min()}-{columns.max()}"
     assert len(columns) > 50, where
     assert abs(columns.mean() - WIDTH / 2) < 2 and abs(rows.mean() - HEIGHT / 2) < 2, where
