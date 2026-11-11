@@ -1,0 +1,2 @@
+# Mesh files are bytes; a checkout must never change their line endings.
+*.cmf binary
