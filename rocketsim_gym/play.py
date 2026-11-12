@@ -49,6 +49,7 @@ from .camera import CameraSettings  # noqa: E402
 from .controls import (BUTTON_COUNT, AnalogInput, Button, InputMode,  # noqa: E402
                        analog_from_buttons)
 from .env import TEAM_SIZES, SoccarEnv  # noqa: E402
+from .pacing import wait_for  # noqa: E402
 
 #: Each key, and the buttons it holds.
 KEYS = {
@@ -181,20 +182,6 @@ def _window_size(text: str) -> tuple[int, int]:
     return width, height
 
 
-def _wait_for(moment: float) -> float:
-    """Wait until ``moment`` on ``time.perf_counter``'s clock, sleeping most of the way and
-    spinning the last 2 ms, since a sleep can overshoot by milliseconds; return when the frame
-    that follows starts, which is now if the frames have fallen a tenth of a second behind."""
-    delay = moment - time.perf_counter()
-    if delay < -0.1:
-        return time.perf_counter()
-    if delay > 0.002:
-        time.sleep(delay - 0.002)
-    while time.perf_counter() < moment:
-        pass
-    return moment
-
-
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Play a match against bots.")
     parser.add_argument("--team-size", type=int, choices=TEAM_SIZES, default=1,
@@ -271,7 +258,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             title = caption(env.sample())
             if window.title != title:
                 window.title = title
-            frame_due = _wait_for(frame_due + frame_seconds)
+            frame_due = wait_for(frame_due + frame_seconds)
     finally:
         env.close()
         pygame.quit()

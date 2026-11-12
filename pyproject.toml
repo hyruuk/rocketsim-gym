@@ -7,7 +7,7 @@ name = "rocketsim-gym"
 version = "0.2.0"
 description = "Rocket League-style soccar as a Gymnasium env, on RocketSim physics and a homemade arena."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Yann Harel" }]
@@ -23,12 +23,13 @@ dependencies = [
 
 [project.scripts]
 rocketsim-play = "rocketsim_gym.play:main"
+rocketsim-server = "rocketsim_gym.lan.server:main"
 
 [project.urls]
 Repository = "https://github.com/hyruuk/rocketsim-gym"
 
 [tool.setuptools]
-packages = ["rocketsim_gym"]
+packages = ["rocketsim_gym", "rocketsim_gym.lan"]
 
 [tool.setuptools.package-data]
 rocketsim_gym = ["collision_meshes/*/soccar/*.cmf", "collision_meshes/*/manifest.json",

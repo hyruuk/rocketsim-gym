@@ -13,11 +13,20 @@ from collections.abc import Iterable, Mapping
 
 import numpy as np
 
+from .arena_geometry import HOMEMADE_ARENA_FOLDER, MANIFEST_FILE_NAME, read_manifest
 from .bot import GOAL_LINE_Y, CarReading, StuckWatch, team_controls
 from .controls import NO_CONTROLS, Controls
-from .engine import KICKOFF_SPOT_COUNT, RESPAWN_SPOT_COUNT, SoccarArena
+from .engine import KICKOFF_SPOT_COUNT, RESPAWN_SPOT_COUNT, SoccarArena, load_rocketsim
 from .match import (TEAMS, TICKS_PER_SECOND, ArenaChanges, Car, Match, Phase, Team, TickEvents)
 from .snapshot import BallSnapshot, CarSnapshot, Snapshot
+
+
+def load_homemade_arena() -> dict[str, str]:
+    """Load RocketSim with the homemade arena, which a process does once; return the arena's
+    manifest: each mesh file and its SHA-256."""
+    manifest = read_manifest(HOMEMADE_ARENA_FOLDER / MANIFEST_FILE_NAME)
+    load_rocketsim(HOMEMADE_ARENA_FOLDER, manifest)
+    return manifest
 
 
 def pad_spots() -> tuple[tuple[tuple[float, float, float], bool], ...]:
@@ -60,6 +69,16 @@ class MatchSimulation:
     def has_ended(self) -> bool:
         """Whether the match is over."""
         return self._match.phase is Phase.ENDED
+
+    def hand_to_bot(self, car: Car) -> None:
+        """Let a bot drive ``car``, a client's until now, from the next step on.
+
+        :raises ValueError: no client drives ``car``.
+        """
+        if car not in self._client_cars:
+            raise ValueError(f"{car.name}: no client drives it")
+        self._client_cars -= {car}
+        self._stuck_watches[car] = StuckWatch()
 
     def step(self, client_controls: Mapping[Car, Controls]) -> None:
         """Play one step: its ticks, each car obeying its controls whenever the match lets it.

@@ -10,13 +10,11 @@ from typing import Any
 import gymnasium
 import numpy as np
 
-from .arena_geometry import HOMEMADE_ARENA_FOLDER, MANIFEST_FILE_NAME, read_manifest
 from .camera import CameraSettings
 from .controls import (ANALOG_HIGH, ANALOG_LOW, BUTTON_COUNT, ControllerSettings, InputMode,
                        buttons_from_action, controls_from_pad, pad_from_analog, pad_from_buttons)
-from .engine import load_rocketsim
 from .match import TICKS_PER_SECOND, Car, Team, match_cars
-from .simulation import MatchSimulation, pad_spots
+from .simulation import MatchSimulation, load_homemade_arena, pad_spots
 from .snapshot import Snapshot
 from .view import SoccarView
 
@@ -138,8 +136,7 @@ class SoccarEnv(gymnasium.Env):
         #: the fields :meth:`sample` returns (:func:`sample_fields`)
         self.sample_fields = sample_fields(team_size)
         self._ticks_per_step = ticks_per_step
-        self._collision_meshes = read_manifest(HOMEMADE_ARENA_FOLDER / MANIFEST_FILE_NAME)
-        load_rocketsim(HOMEMADE_ARENA_FOLDER, self._collision_meshes)
+        self._collision_meshes = load_homemade_arena()
         try:
             self._input_mode = InputMode(input_mode)
         except ValueError:
