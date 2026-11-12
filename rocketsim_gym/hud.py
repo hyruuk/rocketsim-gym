@@ -18,7 +18,7 @@ import numpy as np
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 import pygame  # noqa: E402
 
-from .match import TICKS_PER_SECOND, Car, Match, Phase, Team  # noqa: E402
+from .match import TICKS_PER_SECOND, Car, MatchState, Phase, Team  # noqa: E402
 
 FONT_FILE = Path(__file__).resolve().parent / "fonts" / "RussoOne-Regular.ttf"
 #: GO! stays up this long after a kickoff goes live.
@@ -57,7 +57,7 @@ class Hud:
     caption: str = ""
 
 
-def hud_for(match: Match, boost: float, car: Car = Car(Team.BLUE, 1)) -> Hud:
+def hud_for(match: MatchState, boost: float, car: Car = Car(Team.BLUE, 1)) -> Hud:
     """The display for the player of ``car`` in ``match``, which has ``boost``."""
     if match.overtime:
         clock = "+" + _minutes(match.overtime_ticks // TICKS_PER_SECOND)

@@ -155,7 +155,10 @@ RocketSim simulates Rocket League's physics but needs the arena's collision mesh
 
 ## What is here
 
-- `rocketsim_gym.env`: `SoccarEnv`, registered as `RocketSimSoccar-v0`.
+- `rocketsim_gym.env`: `SoccarEnv`, registered as `RocketSimSoccar-v0`: a match simulation, and a view behind the agent's car.
+- `rocketsim_gym.simulation`: `MatchSimulation`, one match on RocketSim played a step at a time: the cars its clients drive obey the controls they give, and bots drive the others.
+- `rocketsim_gym.snapshot`: `Snapshot`, a match at the end of a step, everything a view, the observation and `sample()` read, and its bytes. It keeps RocketSim's float32 values as they are, so an unpacked snapshot gives the same observation, sample and frame as the one it was packed from.
+- `rocketsim_gym.view`: `SoccarView`, one player's view of a match: the camera behind their car, on car cam or ball cam, and the frame with the on-screen display, drawn from snapshots.
 - `rocketsim_gym.match`: the match rules, a state machine told what happened each tick and answering what the arena must do.
 - `rocketsim_gym.controls`: the inputs, digital or analog, and the car controls they make through a player's controller settings.
 - `rocketsim_gym.bot`: the bots: whose turn it is at the ball, where the others wait, the ball-chaser, and the watch that frees a stuck car.

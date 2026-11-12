@@ -15,8 +15,10 @@ are Rocket League's:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
+from types import MappingProxyType
 
 #: Physics ticks per second, as Rocket League runs them.
 TICKS_PER_SECOND = 120
@@ -104,6 +106,31 @@ class ArenaChanges:
     respawn: tuple[Car, ...] = ()
 
 
+@dataclass(frozen=True)
+class MatchState:
+    """A match at one moment, as the on-screen display and the logs read it: :class:`Match`'s
+    attributes, which it says the same of, fixed.
+
+    :ivar score: each team's goals.
+    :ivar respawn_ticks_left: each demolished car's ticks until it comes back.
+    """
+
+    phase: Phase
+    phase_ticks_left: int
+    clock_ticks_left: int
+    overtime: bool
+    overtime_ticks: int
+    score: Mapping[Team, int]
+    last_goal: Team | None
+    ticks_since_go: int
+    respawn_ticks_left: Mapping[Car, int]
+
+    @property
+    def winner(self) -> Team | None:
+        """The team that won, once the match has ended."""
+        return _winner(self.phase, self.score)
+
+
 class Match:
     """One match: its phase, clock, score, overtime and the demolished cars' wait.
 
@@ -145,9 +172,14 @@ class Match:
     @property
     def winner(self) -> Team | None:
         """The team that won, once the match has ended."""
-        if self.phase is not Phase.ENDED:
-            return None
-        return max(TEAMS, key=self.score.__getitem__)
+        return _winner(self.phase, self.score)
+
+    def state(self) -> MatchState:
+        """The match as it is now, fixed."""
+        return MatchState(self.phase, self.phase_ticks_left, self.clock_ticks_left, self.overtime,
+                          self.overtime_ticks, MappingProxyType(dict(self.score)),
+                          self.last_goal, self.ticks_since_go,
+                          MappingProxyType(dict(self.respawn_ticks_left)))
 
     def takes_controls(self, car: Car) -> bool:
         """Whether ``car`` obeys its controls: not in a countdown, not while demolished."""
@@ -227,3 +259,10 @@ class Match:
         self.phase, self.phase_ticks_left = Phase.COUNTDOWN, COUNTDOWN_TICKS
         self.respawn_ticks_left.clear()
         return ArenaChanges(kickoff=True)
+
+
+def _winner(phase: Phase, score: Mapping[Team, int]) -> Team | None:
+    """The team with the most goals once the match has ended, which a tie never does."""
+    if phase is not Phase.ENDED:
+        return None
+    return max(TEAMS, key=score.__getitem__)

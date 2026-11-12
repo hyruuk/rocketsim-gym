@@ -10,18 +10,15 @@ from typing import Any
 import gymnasium
 import numpy as np
 
-from .arena_geometry import (HOMEMADE_ARENA_FOLDER, MANIFEST_FILE_NAME, collision_mesh_files,
-                             read_collision_mesh_file, read_manifest)
-from .bot import GOAL_LINE_Y, CarReading, StuckWatch, team_controls
-from .camera import CameraSettings, advance_rig, camera_view, start_rig
-from .controls import (ANALOG_HIGH, ANALOG_LOW, BUTTON_COUNT, NO_CONTROLS, Controls,
-                       ControllerSettings, InputMode, buttons_from_action, controls_from_pad,
-                       pad_from_analog, pad_from_buttons)
-from .engine import KICKOFF_SPOT_COUNT, RESPAWN_SPOT_COUNT, SoccarArena, load_rocketsim
-from .hud import HudPainter, hud_for
-from .match import (TEAMS, TICKS_PER_SECOND, ArenaChanges, Car, Match, Phase, Team, TickEvents,
-                    match_cars)
-from .renderer import CarPose, Renderer, Scene
+from .arena_geometry import HOMEMADE_ARENA_FOLDER, MANIFEST_FILE_NAME, read_manifest
+from .camera import CameraSettings
+from .controls import (ANALOG_HIGH, ANALOG_LOW, BUTTON_COUNT, ControllerSettings, InputMode,
+                       buttons_from_action, controls_from_pad, pad_from_analog, pad_from_buttons)
+from .engine import load_rocketsim
+from .match import TICKS_PER_SECOND, Car, Team, match_cars
+from .simulation import MatchSimulation, pad_spots
+from .snapshot import Snapshot
+from .view import SoccarView
 
 #: Cars a team, by match: 1v1, 2v2 and 3v3.
 TEAM_SIZES = (1, 2, 3)
@@ -153,110 +150,76 @@ class SoccarEnv(gymnasium.Env):
             self.action_space = gymnasium.spaces.Box(ANALOG_LOW, ANALOG_HIGH, dtype=np.float32)
         self.observation_space = gymnasium.spaces.Box(-np.inf, np.inf,
                                                       (observation_size(team_size),), np.float32)
-        self._arena: SoccarArena | None = None
+        self._simulation: MatchSimulation | None = None
+        self._snapshot: Snapshot | None = None
         self._camera_settings = _settings(CameraSettings, camera, "camera")
         self._controller_settings = _settings(ControllerSettings, controller, "controller")
-        self._renderer: Renderer | None = None
-        if render_mode == "rgb_array":
-            meshes = [read_collision_mesh_file(path)
-                      for path in collision_mesh_files(HOMEMADE_ARENA_FOLDER)]
-            self._renderer = Renderer(render_width, render_height, meshes,
-                                      SoccarArena().pad_spots())
-            self._hud_painter = HudPainter(render_width, render_height)
+        draws_frames = render_mode == "rgb_array"
+        self._view = SoccarView(PLAYER, self._camera_settings,
+                                (render_width, render_height) if draws_frames else None,
+                                pad_spots() if draws_frames else ())
 
     def reset(self, *, seed: int | None = None,
               options: dict[str, Any] | None = None) -> tuple[np.ndarray, dict[str, Any]]:
         super().reset(seed=seed)
-        self._arena = SoccarArena(self._team_size)
-        self._match = Match(self._match_ticks)
-        self._arena.place_for_kickoff(self._kickoff_spots())
-        self._ball_cam = True
-        self._ball_cam_held = False
-        self._applied = dict.fromkeys(self._cars, NO_CONTROLS)
-        self._stuck_watches = {car: StuckWatch() for car in self._cars if car != PLAYER}
-        self._clear_step_events()
-        car = self._arena.car(PLAYER)
-        self._rig = start_rig(car.pos.as_numpy(), car.rot_mat.forward.as_numpy(),
-                              car.rot_mat.up.as_numpy(), self._ball_cam)
-        self._frame: np.ndarray | None = None
+        self._simulation = MatchSimulation(self._team_size, self._match_ticks,
+                                           self._ticks_per_step, (PLAYER,), self.np_random)
+        self._snapshot = self._simulation.snapshot()
+        self._view.start(self._snapshot)
         return self._observation(), self._info()
 
     def step(self, action: Any) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
-        if self._arena is None:
+        if self._simulation is None:
             raise ValueError("call reset before step")
-        if self._match.phase is Phase.ENDED:
+        if self._simulation.has_ended:
             raise ValueError("the match has ended: call reset")
         if self._input_mode is InputMode.DIGITAL:
             pad = pad_from_buttons(buttons_from_action(action))
         else:
             pad = pad_from_analog(action)
-        if pad.ball_cam and not self._ball_cam_held:
-            self._ball_cam = not self._ball_cam
-        self._ball_cam_held = pad.ball_cam
-        wanted = {**self._bot_controls(),
-                  PLAYER: controls_from_pad(pad, self._controller_settings)}
-        score_before = dict(self._match.score)
-        self._clear_step_events()
-        for _ in range(self._ticks_per_step):
-            if self._match.phase is Phase.ENDED:
-                break
-            events = TickEvents()
-            if self._match.physics_runs:
-                for car in self._cars:
-                    obeys = self._match.takes_controls(car)
-                    self._applied[car] = wanted[car] if obeys else NO_CONTROLS
-                    self._arena.set_controls(car, self._applied[car])
-                events = self._arena.tick()
-            else:
-                self._applied = dict.fromkeys(self._cars, NO_CONTROLS)
-            scores = dict(self._match.score)
-            self._apply(self._match.tick(events))
-            self._record(events, scores)
-        self._advance_camera(self._ticks_per_step / TICKS_PER_SECOND)
-        self._frame = None
-        reward = (self._match.score[Team.BLUE] - score_before[Team.BLUE]
-                  - (self._match.score[Team.ORANGE] - score_before[Team.ORANGE]))
-        terminated = self._match.phase is Phase.ENDED
-        return self._observation(), float(reward), terminated, False, self._info()
+        self._view.press_ball_cam(pad.ball_cam)
+        score_before = self._snapshot.match.score
+        self._simulation.step({PLAYER: controls_from_pad(pad, self._controller_settings)})
+        self._snapshot = self._simulation.snapshot()
+        self._view.advance(self._snapshot, self._ticks_per_step / TICKS_PER_SECOND)
+        score = self._snapshot.match.score
+        reward = (score[Team.BLUE] - score_before[Team.BLUE]
+                  - (score[Team.ORANGE] - score_before[Team.ORANGE]))
+        return self._observation(), float(reward), self._simulation.has_ended, False, self._info()
 
     def render(self) -> np.ndarray | None:
         """The frame of the latest ``reset`` or ``step``, ``(render_height, render_width, 3)``
         RGB bytes with the on-screen display, read-only; drawn once, however often it is asked
         for. None without a render mode."""
-        if self._renderer is None:
+        if not self._view.draws_frames:
             gymnasium.logger.warn("render_mode is None: this env draws no frame")
             return None
-        if self._arena is None:
+        if self._snapshot is None:
             raise ValueError("call reset before render")
-        if self._frame is None:
-            hud = hud_for(self._match, self._arena.car(PLAYER).boost, PLAYER)
-            self._frame = self._hud_painter.paint(self._renderer.draw(self._scene()), hud)
-            self._frame.flags.writeable = False
-        return self._frame
+        return self._view.frame()
 
     def sample(self) -> dict[str, Any]:
         """The state to log for analysis, after the latest ``reset`` or ``step``: each of
         :attr:`sample_fields`, with what happened during that step (``goal``, the scoring
         team's name or ""; each car's ``touch`` and ``demolition``) and the controls each car
         obeyed (``input_*``)."""
-        if self._arena is None:
+        if self._snapshot is None:
             raise ValueError("call reset before sample")
-        ball = self._arena.ball
+        snapshot, match = self._snapshot, self._snapshot.match
         values: list[Any] = [
-            self._match.phase.value, self._match.clock_ticks_left / TICKS_PER_SECOND,
-            self._match.overtime, self._match.overtime_ticks / TICKS_PER_SECOND,
-            self._match.score[Team.BLUE], self._match.score[Team.ORANGE],
-            self._step_goal.value if self._step_goal else "", self._ball_cam,
-            *ball.pos.as_tuple(), *ball.vel.as_tuple(),
+            match.phase.value, match.clock_ticks_left / TICKS_PER_SECOND, match.overtime,
+            match.overtime_ticks / TICKS_PER_SECOND, match.score[Team.BLUE],
+            match.score[Team.ORANGE], snapshot.goal.value if snapshot.goal else "",
+            self._view.ball_cam, *snapshot.ball.position.tolist(),
+            *snapshot.ball.velocity.tolist(),
         ]
-        for car in self._cars:
-            state, applied = self._arena.car(car), self._applied[car]
-            angle = state.rot_mat.as_angle()
-            values += [*state.pos.as_tuple(), *state.vel.as_tuple(), angle.yaw, angle.pitch,
-                       angle.roll, state.boost, state.is_on_ground, state.is_supersonic,
-                       state.is_demoed, self._step_touches[car], self._step_demolitions[car],
-                       applied.throttle, applied.steer, applied.pitch, applied.yaw, applied.roll,
-                       applied.jump, applied.boost, applied.handbrake]
+        for car in snapshot.cars:
+            controls = car.controls
+            values += [*car.position.tolist(), *car.velocity.tolist(), car.yaw, car.pitch,
+                       car.roll, car.boost, car.is_on_ground, car.is_supersonic,
+                       car.is_demolished, car.touched_ball, car.was_demolished,
+                       controls.throttle, controls.steer, controls.pitch, controls.yaw,
+                       controls.roll, controls.jump, controls.boost, controls.handbrake]
         return dict(zip(self.sample_fields, values, strict=True))
 
     def provenance(self) -> dict[str, Any]:
@@ -269,119 +232,34 @@ class SoccarEnv(gymnasium.Env):
             "team_size": self._team_size,
             "ticks_per_second": TICKS_PER_SECOND,
             "ticks_per_step": self._ticks_per_step,
-            "gl_renderer": None if self._renderer is None else self._renderer.gl_renderer,
+            "gl_renderer": self._view.gl_renderer,
             "camera": dataclasses.asdict(self._camera_settings),
             "input_mode": self._input_mode.value,
             "controller": dataclasses.asdict(self._controller_settings),
         }
 
     def close(self) -> None:
-        if self._renderer is not None:
-            self._renderer.close()
-            self._renderer = None
-        self._arena = None
-
-    def _ball_in_play(self) -> np.ndarray | None:
-        """The ball's position, or None while it is out of play after a goal."""
-        return None if self._match.phase is Phase.GOAL else self._arena.ball.pos.as_numpy()
-
-    def _advance_camera(self, seconds: float) -> None:
-        car = self._arena.car(PLAYER)
-        self._rig = advance_rig(self._rig, car.pos.as_numpy(), car.rot_mat.forward.as_numpy(),
-                                car.rot_mat.up.as_numpy(), car.is_on_ground, self._ball_in_play(),
-                                self._ball_cam, seconds, self._camera_settings)
-
-    def _scene(self) -> Scene:
-        ball = self._ball_in_play()
-        cars = []
-        for car in self._cars:
-            state = self._arena.car(car)
-            cars.append(CarPose(car.team, state.pos.as_tuple(), state.rot_mat.forward.as_tuple(),
-                                state.rot_mat.right.as_tuple(), state.rot_mat.up.as_tuple(),
-                                visible=not state.is_demoed,
-                                boosting=self._applied[car].boost and state.boost > 0))
-        camera = camera_view(self._rig, self._arena.car(PLAYER).pos.as_numpy(), ball,
-                             self._camera_settings)
-        axes = self._arena.ball.rot_mat
-        return Scene(camera, None if ball is None else tuple(ball), tuple(cars),
-                     self._arena.pads_active(),
-                     (axes.forward.as_tuple(), axes.right.as_tuple(), axes.up.as_tuple()))
-
-    def _bot_controls(self) -> dict[Car, Controls]:
-        """Each bot's controls for the next step; the agent's car is one of its team's."""
-        ball = np.array(self._arena.ball.pos.as_tuple())
-        seconds = self._ticks_per_step / TICKS_PER_SECOND
-        controls: dict[Car, Controls] = {}
-        for team in TEAMS:
-            cars = [car for car in self._cars if car.team is team]
-            readings = [self._reading(car) for car in cars]
-            attacked_goal_y = GOAL_LINE_Y if team is Team.BLUE else -GOAL_LINE_Y
-            wanted = team_controls(readings, ball, attacked_goal_y)
-            for car, reading, car_wanted in zip(cars, readings, wanted, strict=True):
-                if car == PLAYER:
-                    continue
-                if not self._match.takes_controls(car):
-                    self._stuck_watches[car] = StuckWatch()
-                    controls[car] = car_wanted
-                    continue
-                controls[car] = self._stuck_watches[car].controls(car_wanted, reading, seconds)
-        return controls
-
-    def _reading(self, car: Car) -> CarReading:
-        """``car`` as a bot reads it."""
-        state = self._arena.car(car)
-        axes = state.rot_mat
-        return CarReading(np.array(state.pos.as_tuple()), np.array(state.vel.as_tuple()),
-                          np.array(axes.forward.as_tuple()), np.array(axes.right.as_tuple()),
-                          np.array(axes.up.as_tuple()), state.is_demoed)
-
-    def _kickoff_spots(self) -> list[int]:
-        """A different kickoff spot for each car of a team, drawn at random."""
-        spots = self.np_random.permutation(KICKOFF_SPOT_COUNT)[:self._team_size]
-        return [int(spot) for spot in spots]
-
-    def _apply(self, changes: ArenaChanges) -> None:
-        if changes.kickoff:
-            self._arena.place_for_kickoff(self._kickoff_spots())
-        if changes.remove_ball:
-            self._arena.remove_ball()
-        for team in TEAMS:
-            cars = [car for car in changes.respawn if car.team is team]
-            if not cars:
-                continue
-            # A team's cars that come back together come back at different spots.
-            spots = self.np_random.permutation(RESPAWN_SPOT_COUNT)[:len(cars)]
-            for car, spot in zip(cars, spots, strict=True):
-                self._arena.respawn(car, int(spot))
-
-    def _clear_step_events(self) -> None:
-        self._step_goal: Team | None = None
-        self._step_touches = dict.fromkeys(self._cars, False)
-        self._step_demolitions = dict.fromkeys(self._cars, False)
-
-    def _record(self, events: TickEvents, scores_before_tick: dict[Team, int]) -> None:
-        for team in TEAMS:
-            if self._match.score[team] > scores_before_tick[team]:
-                self._step_goal = team
-        for car in events.touched:
-            self._step_touches[car] = True
-        for car in events.demolished:
-            self._step_demolitions[car] = True
+        self._view.close()
+        self._simulation = None
+        self._snapshot = None
 
     def _observation(self) -> np.ndarray:
-        ball = self._arena.ball
-        values: list[float] = [*ball.pos.as_tuple(), *ball.vel.as_tuple(), *ball.ang_vel.as_tuple()]
-        for car in self._cars:
-            state = self._arena.car(car)
-            values += [*state.pos.as_tuple(), *state.vel.as_tuple(), *state.ang_vel.as_tuple(),
-                       *state.rot_mat.forward.as_tuple(), *state.rot_mat.up.as_tuple(),
-                       state.boost, state.is_on_ground, state.has_flip_or_jump(),
-                       state.is_supersonic, state.is_demoed]
-        values += self._arena.pads_active()
-        values += [self._match.clock_ticks_left / TICKS_PER_SECOND, self._match.score[Team.BLUE],
-                   self._match.score[Team.ORANGE], self._match.overtime]
+        snapshot = self._snapshot
+        ball = snapshot.ball
+        values: list[float] = [*ball.position.tolist(), *ball.velocity.tolist(),
+                               *ball.angular_velocity.tolist()]
+        for car in snapshot.cars:
+            values += [*car.position.tolist(), *car.velocity.tolist(),
+                       *car.angular_velocity.tolist(), *car.forward.tolist(), *car.up.tolist(),
+                       car.boost, car.is_on_ground, car.has_flip_or_jump, car.is_supersonic,
+                       car.is_demolished]
+        values += snapshot.pads_active
+        match = snapshot.match
+        values += [match.clock_ticks_left / TICKS_PER_SECOND, match.score[Team.BLUE],
+                   match.score[Team.ORANGE], match.overtime]
         return np.array(values, dtype=np.float32)
 
     def _info(self) -> dict[str, Any]:
-        return {"phase": self._match.phase.value, "blue_score": self._match.score[Team.BLUE],
-                "orange_score": self._match.score[Team.ORANGE]}
+        match = self._snapshot.match
+        return {"phase": match.phase.value, "blue_score": match.score[Team.BLUE],
+                "orange_score": match.score[Team.ORANGE]}

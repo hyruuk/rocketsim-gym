@@ -27,33 +27,33 @@ def kicked_off(seconds):
 def test_the_countdown_reads_3_2_1_then_go():
     match, banners = Match(300 * TICKS_PER_SECOND), []
     for _ in range(COUNTDOWN_TICKS + GO_TICKS + 1):
-        banners.append(hud_for(match, 33).banner)
+        banners.append(hud_for(match.state(), 33).banner)
         match.tick()
     assert [banners[0], banners[120], banners[240], banners[359]] == ["3", "2", "1", "1"]
     assert banners[COUNTDOWN_TICKS] == "GO!" and banners[-1] == ""
 
 
 def test_the_clock_reads_minutes_and_seconds_and_counts_up_in_overtime():
-    assert hud_for(Match(61 * TICKS_PER_SECOND), 0).clock == "1:01"
+    assert hud_for(Match(61 * TICKS_PER_SECOND).state(), 0).clock == "1:01"
     match = kicked_off(1)
     advance(match, TICKS_PER_SECOND, ON_THE_GROUND)
-    overtime = hud_for(match, 0)
+    overtime = hud_for(match.state(), 0)
     assert match.overtime and (overtime.clock, overtime.caption) == ("+0:00", "OVERTIME")
     advance(match, COUNTDOWN_TICKS)
     match.tick(TOUCH)
     advance(match, 75 * TICKS_PER_SECOND)
-    assert hud_for(match, 0).clock == "+1:15"
+    assert hud_for(match.state(), 0).clock == "+1:15"
 
 
 def test_a_goal_and_the_winner_take_their_teams_color():
     match = kicked_off(2)
     match.tick(TickEvents(goal=Team.ORANGE))
-    goal = hud_for(match, 0)
+    goal = hud_for(match.state(), 0)
     assert (goal.banner, goal.banner_team, goal.orange_score) == ("GOAL!", Team.ORANGE, 1)
     advance(match, GOAL_PAUSE_TICKS + COUNTDOWN_TICKS)
     match.tick(TOUCH)
     advance(match, match.clock_ticks_left, ON_THE_GROUND)
-    end = hud_for(match, 0)
+    end = hud_for(match.state(), 0)
     assert (end.banner, end.banner_team, end.caption) == ("ORANGE WINS", Team.ORANGE, "0 - 1")
 
 
@@ -61,10 +61,10 @@ def test_a_demolished_player_sees_when_their_car_comes_back():
     match = kicked_off(300)
     advance(match, GO_TICKS)
     match.tick(TickEvents(demolished=(BLUE1,)))
-    demolished = hud_for(match, 0)
+    demolished = hud_for(match.state(), 0)
     assert (demolished.banner, demolished.caption) == ("DEMOLISHED", "Back in 3")
-    assert hud_for(match, 0, Car(Team.ORANGE, 1)).banner == ""
-    assert hud_for(match, 0, Car(Team.BLUE, 2)).banner == ""
+    assert hud_for(match.state(), 0, Car(Team.ORANGE, 1)).banner == ""
+    assert hud_for(match.state(), 0, Car(Team.BLUE, 2)).banner == ""
 
 
 def _frame():
