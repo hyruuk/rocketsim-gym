@@ -66,9 +66,41 @@ uvx --refresh --from https://github.com/hyruuk/rocketsim-gym/archive/main.zip ro
 - **"no OpenGL 3.3 context opens to draw frames"**: update the graphics drivers. On Linux, install EGL too; on Debian or Ubuntu: `sudo apt install libegl1 libgl1-mesa-dri`.
 - **The controller does nothing**: check that other games see it, then start the game again with it plugged in.
 
+## Play with others on a local network
+
+Several people, each at their own computer, can play one match together: any of 1v1 to 3v3, as teammates or opponents, with bots in the seats nobody takes. One computer runs a match server, which plays the match; every player's window sends its controls to it and shows the match from the player's own car. The computers need not be alike (a Mac and a Linux PC play together), but they need the same version of this package. Only the server needs RocketSim, so a player's computer can be one RocketSim does not support, such as an Intel Mac.
+
+**1. Start the server**, once, on a computer nobody plays on (its window takes typed commands):
+
+```bash
+uvx --from https://github.com/hyruuk/rocketsim-gym/archive/main.zip rocketsim-server
+```
+
+It prints how players join it, such as `rocketsim-play --join 192.168.1.20:47800`, and keeps a log of each match in `matches/`. On a Mac, run it as `caffeinate -i rocketsim-server ...`, so that the Mac does not doze.
+
+**2. Join**, at each player's computer. The first player sets the match: `--seats` names the cars people drive, the others go to bots, and `--seat` is your own:
+
+```bash
+uvx --from https://github.com/hyruuk/rocketsim-gym/archive/main.zip rocketsim-play --join --team-size 2 --seats blue1,blue2 --seat blue1
+```
+
+The others join the room's match with `--join` alone, taking the first free seat, or the one `--seat` names. `--join` finds the server on the network by itself; where the network does not let it, give the address the server printed: `--join 192.168.1.20:47800`. Each player shows a waiting screen until everyone has joined; then the countdown starts for all.
+
+**While a match is on**, the server's window takes these commands:
+
+- `status`: who is in which seat, and how late each player's controls arrive.
+- `pause`, and `resume`: a player whose computer drops out (it closes, or stops answering for 2 s) pauses the match for everyone, and `resume` goes on once everyone is back. A player rejoins by starting `rocketsim-play --join --seat SEAT` again.
+- `bot SEAT`: a bot drives that seat to the end of the match.
+- `end`: the match ends now.
+- `quit`: the server stops.
+
+**On the network:** wired is best; Wi-Fi works, with occasional hiccups. The first time, each computer may ask to let the game through its firewall: allow it. On macOS 15 or later, also allow the terminal app in System Settings › Privacy & Security › Local Network; without it, nothing reaches the other computers, although `ping` does. On Windows, the network must be a Private one. On Linux with `ufw`, open the server's ports: `sudo ufw allow 47800:47801/udp && sudo ufw allow 47800/tcp`. Some networks (campus Wi-Fi often) keep computers from reaching each other at all; a home router or a cable between the two computers then does.
+
+A player's controls take about one frame longer to show than on their own computer, and the server applies every one of them in order, so a quick tap is never lost. Each match's log has every player's controls, step by step; `rocketsim_gym.lan.match_log.replay_match(path)` plays it again and checks that it gives the same match, which it does on the server's computer.
+
 ## Status
 
-Early. What works today: a whole 1v1, 2v2 or 3v3 match on the homemade arena with scripted bots that take turns at the ball, with Rocket League's match rules, seen from Rocket League's car cam and ball cam with its on-screen display, played with digital or analog controls and the player's own camera and controller settings; the play window; and the Gymnasium env behind both. The arena and the cars are homemade and low-poly. Next, in this order:
+Early. What works today: a whole 1v1, 2v2 or 3v3 match on the homemade arena with scripted bots that take turns at the ball, with Rocket League's match rules, seen from Rocket League's car cam and ball cam with its on-screen display, played with digital or analog controls and the player's own camera and controller settings; matches with other players on a local network; the play window; and the Gymnasium env behind them. The arena and the cars are homemade and low-poly. Next, in this order:
 
 1. The real arena, from collision meshes dumped from a Rocket League install.
 
@@ -159,6 +191,9 @@ RocketSim simulates Rocket League's physics but needs the arena's collision mesh
 - `rocketsim_gym.simulation`: `MatchSimulation`, one match on RocketSim played a step at a time: the cars its clients drive obey the controls they give, and bots drive the others.
 - `rocketsim_gym.snapshot`: `Snapshot`, a match at the end of a step, everything a view, the observation and `sample()` read, and its bytes. It keeps RocketSim's float32 values as they are, so an unpacked snapshot gives the same observation, sample and frame as the one it was packed from.
 - `rocketsim_gym.view`: `SoccarView`, one player's view of a match: the camera behind their car, on car cam or ball cam, and the frame with the on-screen display, drawn from snapshots.
+- `rocketsim_gym.lan`: matches over a local network. `protocol` is what servers and clients say to each other; `room` is a server's room and the rules it follows (who may join, when a match starts, pauses and goes on, each player's controls queued in order); `server` is `rocketsim-server`; `connection` finds servers and joins one; `client` is a player's side, with the buffer that shows the server's frames in order; `match_log` is a match's log, and replaying it.
+- `rocketsim_gym.boost_pads`: the field's boost pads, written out so that a computer without RocketSim draws them.
+- `rocketsim_gym.pacing`: keeping time for the play window's and the server's loops.
 - `rocketsim_gym.match`: the match rules, a state machine told what happened each tick and answering what the arena must do.
 - `rocketsim_gym.controls`: the inputs, digital or analog, and the car controls they make through a player's controller settings.
 - `rocketsim_gym.bot`: the bots: whose turn it is at the ball, where the others wait, the ball-chaser, and the watch that frees a stuck car.

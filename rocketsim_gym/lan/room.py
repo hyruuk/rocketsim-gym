@@ -161,7 +161,6 @@ class Room:
     :param rocketsim_gym_version: the server's package version, which clients must have.
     :param collision_meshes: the server's arena (each mesh file and its SHA-256), which clients
         must draw.
-    :param pad_spots: each boost pad's position and whether it is big, which clients draw.
     :param server_host: the server's computer, as clients name it.
     :param udp_port: the port clients send their controls to.
     :param log_folder: where match logs go.
@@ -171,12 +170,11 @@ class Room:
     """
 
     def __init__(self, rocketsim_gym_version: str, collision_meshes: Mapping[str, str],
-                 pad_spots, server_host: str, udp_port: int, log_folder: Path,
+                 server_host: str, udp_port: int, log_folder: Path,
                  seed: int | None, report: Callable[[str], None],
                  clock: Callable[[], float]) -> None:
         self._version = rocketsim_gym_version
         self._collision_meshes = dict(collision_meshes)
-        self._pad_spots = tuple(pad_spots)
         self._server_host = server_host
         self._udp_port = udp_port
         self._log_folder = log_folder
@@ -234,8 +232,7 @@ class Room:
                      + (" the paused match" if rejoins else ""))
         if rejoins:
             self._event(now, "rejoin", seat=seat.car.name, host=request.host)
-        return Welcome(seat.token, self._udp_port, seat.car.name, self.setup, self._pad_spots,
-                       self._server_host)
+        return Welcome(seat.token, self._udp_port, seat.car.name, self.setup, self._server_host)
 
     def ready(self, token: bytes, now: float) -> None:
         """A client stepping since its reset: ready for a match, or back in a paused one."""

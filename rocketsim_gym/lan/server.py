@@ -38,7 +38,7 @@ from typing import Any
 
 from ..match import TICKS_PER_SECOND
 from ..pacing import GIVE_UP_SECONDS, wait_for
-from ..simulation import load_homemade_arena, pad_spots
+from ..simulation import load_homemade_arena
 from .protocol import (DEFAULT_PORT, DISCOVERY_PORT, TICKS_PER_STEP, ControlsMessage,
                        JoinRequest, MessageReader, ProtocolError, Refusal, encode_message,
                        is_find_query)
@@ -94,7 +94,7 @@ class MatchServer:
             self.discovery_port = self._discovery.getsockname()[1]
         self.host = socket.gethostname()
         self.room = Room(importlib.metadata.version("rocketsim-gym"), collision_meshes,
-                         pad_spots(), self.host, self.port, log_folder, seed, report, clock)
+                         self.host, self.port, log_folder, seed, report, clock)
         self._connections: list[_Connection] = []
         self._commands: queue.Queue[str] = queue.Queue()
         #: False once the quit command came.

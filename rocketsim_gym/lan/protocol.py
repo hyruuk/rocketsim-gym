@@ -200,31 +200,26 @@ class JoinRequest:
 
 @dataclass(frozen=True)
 class Welcome:
-    """The server's yes: the client's seat and the match, the token its datagrams carry, the
-    server's UDP port, and what the client needs to draw (the boost pads)."""
+    """The server's yes: the client's seat and the match, the token its datagrams carry, and
+    the server's UDP port."""
 
     token: bytes
     udp_port: int
     seat: str
     setup: Setup
-    pad_spots: tuple[tuple[tuple[float, float, float], bool], ...]
     server_host: str
 
     def record(self) -> dict[str, Any]:
         return {"type": "welcome", "token": self.token.hex(), "udp_port": self.udp_port,
-                "seat": self.seat, "setup": self.setup.record(),
-                "pad_spots": [[list(position), big] for position, big in self.pad_spots],
-                "server_host": self.server_host}
+                "seat": self.seat, "setup": self.setup.record(), "server_host": self.server_host}
 
     @classmethod
     def from_record(cls, record: Mapping[str, Any]) -> Welcome:
         fields = _object(record, "a welcome", ("type", "token", "udp_port", "seat", "setup",
-                                               "pad_spots", "server_host"))
+                                               "server_host"))
         try:
-            pad_spots = tuple((tuple(float(value) for value in position), bool(big))
-                              for position, big in fields["pad_spots"])
             return cls(bytes.fromhex(fields["token"]), int(fields["udp_port"]), fields["seat"],
-                       Setup.from_record(fields["setup"]), pad_spots, fields["server_host"])
+                       Setup.from_record(fields["setup"]), fields["server_host"])
         except (TypeError, ValueError) as error:
             raise ProtocolError(f"a welcome that does not read: {error}") from None
 

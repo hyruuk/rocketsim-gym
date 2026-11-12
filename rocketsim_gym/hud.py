@@ -111,6 +111,15 @@ class HudPainter:
         painted = np.frombuffer(pygame.image.tobytes(surface, "RGB"), np.uint8)
         return painted.reshape(self.height, self.width, 3)
 
+    def message(self, banner: str, caption: str = "") -> np.ndarray:
+        """A frame of ``banner`` and ``caption`` alone, as the banners show them, on the clock's
+        dark background: for a moment with no match to show."""
+        surface = pygame.Surface((self.width, self.height))
+        surface.fill(CLOCK_BOX)
+        self._banner(surface, Hud(0, 0, "", 0.0, banner, None, caption))
+        painted = np.frombuffer(pygame.image.tobytes(surface, "RGB"), np.uint8)
+        return painted.reshape(self.height, self.width, 3)
+
     def _pixels(self, size: float) -> int:
         return max(1, round(size * self._scale))
 

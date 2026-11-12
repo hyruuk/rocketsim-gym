@@ -1,9 +1,16 @@
-"""Play a match against bots in a window on this computer: 1v1, 2v2 or 3v3.
+"""Play a match in a window: against bots on this computer, or with other players on this
+network, 1v1, 2v2 or 3v3.
 
     rocketsim-play [--team-size 1] [--seconds 300] [--seed N] [--window 1280x720] [--input analog]
                    [--deadzone 0.1] [--steering-sensitivity 1] [--aerial-sensitivity 1]
                    [--field-of-view 110] [--distance 270] [--height 100] [--angle -3]
                    [--stiffness 1] [--transition-speed 1]
+                   [--join [ADDRESS] [--seat SEAT] [--seats SEAT,SEAT...]]
+
+With ``--join``, the window joins the match a ``rocketsim-server`` plays on this network (the one
+at ADDRESS, HOST or HOST:PORT, if given): in the seat ``--seat`` names, or the first free one, of
+the room's match, or, for the first player to join, of the match that ``--seats`` (the cars
+players drive), ``--team-size`` and ``--seconds`` set.
 
 The keyboard and mouse follow Rocket League's PC defaults, and an Xbox-style controller works
 too. With ``--input analog``, the default, its triggers and left stick count as far as they are
@@ -26,7 +33,8 @@ air roll left     Q
 air roll right    E
 ================  ====================  ==============
 
-Esc quits; when the match is over, Enter plays another.
+Esc quits; when the match is over, Enter plays another (in a LAN match, once every seat's
+player is ready).
 """
 
 from __future__ import annotations
@@ -49,6 +57,7 @@ from .camera import CameraSettings  # noqa: E402
 from .controls import (BUTTON_COUNT, AnalogInput, Button, InputMode,  # noqa: E402
                        analog_from_buttons)
 from .env import TEAM_SIZES, SoccarEnv  # noqa: E402
+from .lan.connection import JoinRefused, find_servers, server_address  # noqa: E402
 from .pacing import wait_for  # noqa: E402
 
 #: Each key, and the buttons it holds.
@@ -152,10 +161,42 @@ def pad_inputs(keys_held: Mapping[int, bool] | Sequence[bool], mouse_held: Seque
 
 
 def caption(sample: Mapping[str, Any]) -> str:
-    """The window's title: what the keys do now."""
-    if sample["phase"] == "ended":
-        return "rocketsim-gym: Enter plays another match, Esc quits"
-    return "rocketsim-gym: Esc quits"
+    """The window's title: what the keys do now; in a LAN match, also the room's state and the
+    delay of the player's controls."""
+    is_over = sample["phase"] == "ended" or sample.get("room") in ("ended", "stopped", "closing")
+    keys = "Enter plays another match, Esc quits" if is_over else "Esc quits"
+    if "client" not in sample:
+        return f"rocketsim-gym: {keys}"
+    delay = ("" if sample["input_delay"] is None
+             else f", input delay {sample['input_delay']} frames")
+    return f"rocketsim-gym LAN ({sample['room'] or sample['client']}{delay}): {keys}"
+
+
+def lan_arguments(join: str, seat: str | None, seats: str | None, team_size: int,
+                  seconds: float) -> dict[str, Any]:
+    """The env's arguments for joining a LAN match: the server's address, and the match the
+    flags set (``seats``, ``team_size``, ``seconds``) or else the room's, with the seat asked
+    for or else the room's first free one.
+
+    :raises ConnectionError: no server answers, with what to do.
+    :raises ValueError: the room has no match and the flags set none, or no seat is free.
+    """
+    host, port, _ = server_address(join)
+    server = f"{host}:{port}"
+    if seats is not None:
+        names = [name.strip() for name in seats.split(",") if name.strip()]
+        return {"server": server, "seats": names, "seat": seat or (names[0] if names else None),
+                "team_size": team_size, "match_seconds": seconds}
+    rooms = [room for room in find_servers(hosts=(host,)) if room.port == port]
+    if not rooms or rooms[0].setup is None:
+        raise ValueError(f"the server at {server} has no match yet, or does not say: set one "
+                         f"with --seats (and --team-size, --seconds)")
+    room = rooms[0]
+    free = [name for name in room.setup.seats if name not in room.seats]
+    if seat is None and not free:
+        raise ValueError(f"every seat of the match at {server} is taken")
+    return {"server": server, "seats": list(room.setup.seats), "seat": seat or free[0],
+            "team_size": room.setup.team_size, "match_seconds": room.setup.match_seconds}
 
 
 def _open_window(width: int, height: int) -> tuple[Window, Renderer]:
@@ -185,8 +226,8 @@ def _window_size(text: str) -> tuple[int, int]:
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Play a match against bots.")
     parser.add_argument("--team-size", type=int, choices=TEAM_SIZES, default=1,
-                        help="cars a team: 1 (1v1, the default), 2 (2v2) or 3 (3v3); you drive "
-                             "one of blue's, bots the others")
+                        help="cars a team: 1 (1v1, the default), 2 (2v2) or 3 (3v3); on this "
+                             "computer, you drive one of blue's, bots the others")
     parser.add_argument("--seconds", type=float, default=300.0, help="regulation time")
     parser.add_argument("--seed", type=int, default=None, help="seed of the kickoff spots")
     parser.add_argument("--window", type=_window_size, default=(1280, 720),
@@ -211,19 +252,44 @@ def main(argv: Sequence[str] | None = None) -> None:
         camera.add_argument("--" + name.replace("_", "-"), type=float, dest=name,
                             default=getattr(defaults, name),
                             help=f"{help_text}; default {getattr(defaults, name):g}")
+    lan = parser.add_argument_group("LAN play", "join a match that rocketsim-server plays")
+    lan.add_argument("--join", nargs="?", const="auto", metavar="ADDRESS",
+                     help="join the match of the server on this network, or of the one at "
+                          "ADDRESS (HOST or HOST:PORT)")
+    lan.add_argument("--seat", help="the car you drive, such as orange1 (default: the first "
+                                    "free seat)")
+    lan.add_argument("--seats", help="for the first to join: the cars players drive, such as "
+                                     "blue1,orange1; with --team-size and --seconds, it sets the "
+                                     "match (default: the room's)")
     arguments = parser.parse_args(argv)
     width, height = arguments.window
+    lan_settings: dict[str, Any] = {}
+    if arguments.join is None and (arguments.seat or arguments.seats):
+        parser.error("--seat and --seats: only with --join")
+    if arguments.join is not None:
+        if arguments.seed is not None:
+            parser.error("--seed: a LAN match takes the server's seeds (rocketsim-server --seed)")
+        try:
+            lan_settings = lan_arguments(arguments.join, arguments.seat, arguments.seats,
+                                         arguments.team_size, arguments.seconds)
+        except (ConnectionError, ValueError) as error:
+            parser.error(str(error))
     settings = {name: getattr(arguments, name) for name in
                 ("field_of_view", "distance", "height", "angle", "stiffness", "transition_speed")}
     controller_settings = {name: getattr(arguments, name)
                            for name in ("deadzone", "steering_sensitivity", "aerial_sensitivity")}
+    match = {"match_seconds": arguments.seconds, "team_size": arguments.team_size, **lan_settings}
     try:
-        env = SoccarEnv(match_seconds=arguments.seconds, team_size=arguments.team_size,
-                        render_mode="rgb_array", render_width=width, render_height=height,
+        env = SoccarEnv(render_mode="rgb_array", render_width=width, render_height=height,
                         camera=settings, input_mode=arguments.input,
-                        controller=controller_settings)
+                        controller=controller_settings, **match)
     except ValueError as error:
         parser.error(str(error))
+    try:
+        env.reset(seed=arguments.seed)
+    except (ConnectionError, JoinRefused) as error:
+        env.close()
+        parser.exit(1, f"rocketsim-play: {error}\n")
     read_inputs = pad_inputs if arguments.input == InputMode.ANALOG.value else pressed_buttons
     pygame.init()
     sdl_controller.init()
@@ -232,7 +298,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     if sdl_controller.get_count() and sdl_controller.is_controller(0):
         controller = sdl_controller.Controller(0)
     frame_seconds = 1 / env.metadata["render_fps"]
-    env.reset(seed=arguments.seed)
     playing = True
     frame_due = time.perf_counter()
     try:
@@ -242,7 +307,11 @@ def main(argv: Sequence[str] | None = None) -> None:
                         event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
                     return
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_RETURN and not playing:
-                    env.reset()
+                    try:
+                        env.reset()
+                    except (ConnectionError, JoinRefused) as error:
+                        print(f"rocketsim-play: {error}", file=sys.stderr)
+                        return
                     playing = True
                 if (event.type == pygame.CONTROLLERDEVICEADDED and controller is None
                         and sdl_controller.is_controller(event.device_index)):
@@ -250,7 +319,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             if playing:
                 action = read_inputs(pygame.key.get_pressed(), pygame.mouse.get_pressed(),
                                      controller)
-                playing = not env.step(action)[2]
+                _, _, terminated, truncated, _ = env.step(action)
+                playing = not (terminated or truncated)
             frame = env.render()
             image = pygame.image.frombuffer(frame.tobytes(), (frame.shape[1], frame.shape[0]), "RGB")
             Texture.from_surface(renderer, image).draw()

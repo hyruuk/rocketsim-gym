@@ -6,7 +6,8 @@ import pygame
 import pytest
 
 from rocketsim_gym.controls import BUTTON_COUNT, AnalogInput, Button
-from rocketsim_gym.play import _window_size, caption, main, pad_inputs, pressed_buttons
+from rocketsim_gym.play import (_window_size, caption, lan_arguments, main, pad_inputs,
+                                pressed_buttons)
 
 NO_MOUSE = (False, False, False)
 
@@ -98,3 +99,25 @@ def test_a_held_key_is_a_full_push_over_the_stick_on_its_axis():
     action = pad_inputs(keys(pygame.K_d, pygame.K_w), NO_MOUSE, controller)
     assert action[AnalogInput.STICK_X] == 1.0 and action[AnalogInput.THROTTLE] == 1.0
     assert action[AnalogInput.STICK_Y] == -1.0
+
+
+def test_lan_flags_without_join_or_with_a_seed_stop_the_window_before_it_opens(capsys):
+    with pytest.raises(SystemExit):
+        main(["--seat", "blue1"])
+    assert "--join" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        main(["--join", "127.0.0.1:47999", "--seats", "blue1", "--seed", "3"])
+    assert "--seed" in capsys.readouterr().err
+
+
+def test_the_first_to_join_sets_the_match_and_takes_its_first_seat_by_default():
+    assert lan_arguments("127.0.0.1:47999", None, "orange1, blue1", 1, 60.0) == {
+        "server": "127.0.0.1:47999", "seats": ["orange1", "blue1"], "seat": "orange1",
+        "team_size": 1, "match_seconds": 60.0}
+
+
+def test_the_title_of_a_lan_match_says_the_room_and_the_input_delay():
+    sample = {"phase": "play", "client": "live", "room": "playing", "server_frame": 3,
+              "input_delay": 2}
+    assert caption(sample) == "rocketsim-gym LAN (playing, input delay 2 frames): Esc quits"
+    assert "Enter plays another match" in caption({**sample, "room": "stopped"})

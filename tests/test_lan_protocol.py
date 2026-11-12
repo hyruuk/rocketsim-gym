@@ -38,7 +38,7 @@ def test_a_setup_out_of_range_is_refused(team_size, seats, seconds):
 def test_joins_welcomes_and_refusals_read_back():
     request = JoinRequest("0.3.0", {"soccar/arena.cmf": "ab12"}, SETUP, "blue1", "mac")
     assert JoinRequest.from_record(request.record()) == request
-    welcome = Welcome(TOKEN, 47800, "blue1", SETUP, (((1.0, 2.0, 3.0), True),), "server")
+    welcome = Welcome(TOKEN, 47800, "blue1", SETUP, "server")
     assert Welcome.from_record(welcome.record()) == welcome
     refusal = Refusal("busy", is_final=False)
     assert Refusal.from_record(refusal.record()) == refusal

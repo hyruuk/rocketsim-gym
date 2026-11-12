@@ -2,12 +2,16 @@
 ball cam, and the frame it shows with the on-screen display over it, drawn from snapshots
 (:mod:`rocketsim_gym.snapshot`).
 
-The camera moves only when the view is given a new snapshot; drawing changes nothing.
+The camera moves only when the view is given a new snapshot, as far as the match moved on;
+drawing changes nothing. A notice (a LAN match paused, say) takes the place of the match's own
+banner, and with no snapshot to show, a frame shows a notice alone.
 """
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -17,6 +21,14 @@ from .hud import HudPainter, hud_for
 from .match import Car
 from .renderer import CarPose, Renderer, Scene
 from .snapshot import Snapshot
+
+
+@dataclass(frozen=True)
+class Notice:
+    """What a frame says in place of the match's own banner: a word, and a line under it."""
+
+    banner: str
+    caption: str = ""
 
 
 class SoccarView:
@@ -37,6 +49,9 @@ class SoccarView:
         self._camera_settings = camera_settings
         self._renderer: Renderer | None = None
         self._snapshot: Snapshot | None = None
+        self._notice: Notice | None = None
+        self._ball_cam, self._ball_cam_held = True, False
+        self._frame: np.ndarray | None = None
         if frame_size is not None:
             meshes = [read_collision_mesh_file(path)
                       for path in collision_mesh_files(HOMEMADE_ARENA_FOLDER)]
@@ -58,13 +73,17 @@ class SoccarView:
         """Whether the camera is on ball cam."""
         return self._ball_cam
 
-    def start(self, snapshot: Snapshot) -> None:
+    def start(self, snapshot: Snapshot, notice: Notice | None = None) -> None:
         """Settle the camera behind the car, on ball cam, at a match's first snapshot."""
         self._ball_cam = True
         self._ball_cam_held = False
         car = snapshot.car(self.car)
         self._rig = start_rig(car.position, car.forward, car.up, self._ball_cam)
-        self._snapshot, self._frame = snapshot, None
+        self._snapshot, self._notice, self._frame = snapshot, notice, None
+
+    def show_notice(self, notice: Notice) -> None:
+        """Show ``notice`` alone, with no match to show."""
+        self._snapshot, self._notice, self._frame = None, notice, None
 
     def press_ball_cam(self, is_held: bool) -> None:
         """The ball cam button, held or not: a press switches between car cam and ball cam."""
@@ -72,29 +91,38 @@ class SoccarView:
             self._ball_cam = not self._ball_cam
         self._ball_cam_held = is_held
 
-    def advance(self, snapshot: Snapshot, seconds: float) -> None:
-        """Move the camera on to ``snapshot``, ``seconds`` of the match after the last one."""
-        car = snapshot.car(self.car)
-        self._rig = advance_rig(self._rig, car.position, car.forward, car.up, car.is_on_ground,
-                                snapshot.ball_in_play, self._ball_cam, seconds,
-                                self._camera_settings)
-        self._snapshot, self._frame = snapshot, None
+    def advance(self, snapshot: Snapshot, seconds: float, notice: Notice | None = None) -> None:
+        """Move the camera on to ``snapshot``, ``seconds`` of the match after the last one; with
+        none, the camera stays where it is."""
+        if seconds > 0:
+            car = snapshot.car(self.car)
+            self._rig = advance_rig(self._rig, car.position, car.forward, car.up,
+                                    car.is_on_ground, snapshot.ball_in_play, self._ball_cam,
+                                    seconds, self._camera_settings)
+        self._snapshot, self._notice, self._frame = snapshot, notice, None
 
     def frame(self) -> np.ndarray:
-        """The frame of the latest snapshot, ``(height, width, 3)`` RGB bytes with the on-screen
-        display, read-only; drawn once, however often it is asked for.
+        """The frame of the latest snapshot or notice, ``(height, width, 3)`` RGB bytes with the
+        on-screen display, read-only; drawn once, however often it is asked for.
 
-        :raises ValueError: the view draws no frames, or has no snapshot yet.
+        :raises ValueError: the view draws no frames, or has nothing to draw yet.
         """
         if self._renderer is None:
             raise ValueError("this view draws no frames")
-        if self._snapshot is None:
-            raise ValueError("this view has no snapshot to draw yet")
-        if self._frame is None:
+        if self._frame is not None:
+            return self._frame
+        if self._snapshot is not None:
             car = self._snapshot.car(self.car)
             hud = hud_for(self._snapshot.match, car.boost, self.car)
+            if self._notice is not None:
+                hud = dataclasses.replace(hud, banner=self._notice.banner, banner_team=None,
+                                          caption=self._notice.caption)
             self._frame = self._hud_painter.paint(self._renderer.draw(self._scene()), hud)
-            self._frame.flags.writeable = False
+        elif self._notice is not None:
+            self._frame = self._hud_painter.message(self._notice.banner, self._notice.caption)
+        else:
+            raise ValueError("this view has nothing to draw yet")
+        self._frame.flags.writeable = False
         return self._frame
 
     def close(self) -> None:

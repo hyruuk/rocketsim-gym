@@ -37,20 +37,21 @@ class JoinRefused(RuntimeError):
         self.refusal = refusal
 
 
-def find_servers(timeout: float = FIND_SECONDS,
-                 discovery_port: int = DISCOVERY_PORT) -> list[Announcement]:
-    """The servers that answer a query on this network and this computer within ``timeout``
-    seconds, each once.
+def find_servers(timeout: float = FIND_SECONDS, discovery_port: int = DISCOVERY_PORT,
+                 hosts: Iterable[str] = ("<broadcast>", "127.0.0.1")) -> list[Announcement]:
+    """The servers that answer a query within ``timeout`` seconds, each once: by default, the
+    ones on this network and on this computer.
 
+    :param hosts: where the query goes.
     :raises ConnectionError: the query could not be sent anywhere, with what to do.
     """
     found: dict[tuple[str, int], Announcement] = {}
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         problems = []
-        for address in ("<broadcast>", "127.0.0.1"):
+        for host in hosts:
             try:
-                sock.sendto(find_query(), (address, discovery_port))
+                sock.sendto(find_query(), (host, discovery_port))
             except OSError as error:
                 problems.append(error)
         deadline = time.perf_counter() + timeout

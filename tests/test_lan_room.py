@@ -35,8 +35,8 @@ class Lab:
 
     def __init__(self, log_folder, seed=7):
         self.clock, self.news = Clock(), []
-        self.room = Room(VERSION, MESHES, (), "server", 47800, log_folder, seed,
-                         self.news.append, self.clock)
+        self.room = Room(VERSION, MESHES, "server", 47800, log_folder, seed, self.news.append,
+                         self.clock)
         self.sequences = {}
 
     def join(self, seat, setup=SETUP, version=VERSION, meshes=MESHES):
