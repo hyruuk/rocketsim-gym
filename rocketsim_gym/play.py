@@ -1,6 +1,6 @@
-"""Play a match against the bot in a window on this computer.
+"""Play a match against bots in a window on this computer: 1v1, 2v2 or 3v3.
 
-    rocketsim-play [--seconds 300] [--seed N] [--window 1280x720] [--input analog]
+    rocketsim-play [--team-size 1] [--seconds 300] [--seed N] [--window 1280x720] [--input analog]
                    [--deadzone 0.1] [--steering-sensitivity 1] [--aerial-sensitivity 1]
                    [--field-of-view 110] [--distance 270] [--height 100] [--angle -3]
                    [--stiffness 1] [--transition-speed 1]
@@ -48,7 +48,7 @@ from pygame._sdl2.video import Renderer, Texture, Window  # noqa: E402
 from .camera import CameraSettings  # noqa: E402
 from .controls import (BUTTON_COUNT, AnalogInput, Button, InputMode,  # noqa: E402
                        analog_from_buttons)
-from .env import SoccarEnv  # noqa: E402
+from .env import TEAM_SIZES, SoccarEnv  # noqa: E402
 
 #: Each key, and the buttons it holds.
 KEYS = {
@@ -196,7 +196,10 @@ def _wait_for(moment: float) -> float:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Play a match against the bot.")
+    parser = argparse.ArgumentParser(description="Play a match against bots.")
+    parser.add_argument("--team-size", type=int, choices=TEAM_SIZES, default=1,
+                        help="cars a team: 1 (1v1, the default), 2 (2v2) or 3 (3v3); you drive "
+                             "one of blue's, bots the others")
     parser.add_argument("--seconds", type=float, default=300.0, help="regulation time")
     parser.add_argument("--seed", type=int, default=None, help="seed of the kickoff spots")
     parser.add_argument("--window", type=_window_size, default=(1280, 720),
@@ -228,9 +231,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     controller_settings = {name: getattr(arguments, name)
                            for name in ("deadzone", "steering_sensitivity", "aerial_sensitivity")}
     try:
-        env = SoccarEnv(match_seconds=arguments.seconds, render_mode="rgb_array",
-                        render_width=width, render_height=height, camera=settings,
-                        input_mode=arguments.input, controller=controller_settings)
+        env = SoccarEnv(match_seconds=arguments.seconds, team_size=arguments.team_size,
+                        render_mode="rgb_array", render_width=width, render_height=height,
+                        camera=settings, input_mode=arguments.input,
+                        controller=controller_settings)
     except ValueError as error:
         parser.error(str(error))
     read_inputs = pad_inputs if arguments.input == InputMode.ANALOG.value else pressed_buttons

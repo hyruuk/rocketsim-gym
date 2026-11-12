@@ -1,10 +1,11 @@
 # rocketsim-gym
 
-Rocket League-style soccar to play against a bot on your own computer, and the same game as a [Gymnasium](https://gymnasium.farama.org) env for AI agents, so that a person and a model play exactly the same game. It runs on [RocketSim](https://github.com/ZealanL/RocketSim), a simulation of Rocket League's physics, on a homemade arena: nothing from Rocket League itself is needed. It is made for [fmri-gym](https://github.com/tomov/fmri-gym), which runs games for people to play in an MRI scanner.
+Rocket League-style soccar to play against bots on your own computer, 1v1, 2v2 or 3v3, and the same game as a [Gymnasium](https://gymnasium.farama.org) env for AI agents, so that a person and a model play exactly the same game. It runs on [RocketSim](https://github.com/ZealanL/RocketSim), a simulation of Rocket League's physics, on a homemade arena: nothing from Rocket League itself is needed. It is made for [fmri-gym](https://github.com/tomov/fmri-gym), which runs games for people to play in an MRI scanner.
 
 ![The kickoff countdown, on ball cam](docs/screenshots/kickoff.png)
 ![Chasing the ball, the orange bot on the right](docs/screenshots/chasing-the-ball.png)
 ![Ball cam looking up at a ball in the air](docs/screenshots/ball-in-the-air.png)
+![A 3v3 kickoff from the back, a teammate on each diagonal](docs/screenshots/3v3-kickoff.png)
 
 ## Get started
 
@@ -30,7 +31,7 @@ Then close the terminal and open a new one, so that it finds `uv`.
 uvx --from https://github.com/hyruuk/rocketsim-gym/archive/main.zip rocketsim-play
 ```
 
-A window opens on a 5-minute match against the bot. The first start downloads what the game needs and takes a minute or so; later ones take seconds. If the window opens behind the terminal, click it. Add `--seconds 120` at the end for a shorter match, or `--window 1920x1080` for a bigger window. Rocket League players can bring their own camera and controller settings, in the game's units, for example `--field-of-view 110 --distance 270 --height 100 --angle -3 --stiffness 0.45 --transition-speed 1.2 --deadzone 0.05 --steering-sensitivity 1.3 --aerial-sensitivity 1.3`.
+A window opens on a 5-minute 1v1 match against a bot. The first start downloads what the game needs and takes a minute or so; later ones take seconds. If the window opens behind the terminal, click it. Add `--team-size 2` at the end for 2v2 or `--team-size 3` for 3v3, with bots for your teammates and your opponents, `--seconds 120` for a shorter match, or `--window 1920x1080` for a bigger window. Rocket League players can bring their own camera and controller settings, in the game's units, for example `--field-of-view 110 --distance 270 --height 100 --angle -3 --stiffness 0.45 --transition-speed 1.2 --deadzone 0.05 --steering-sensitivity 1.3 --aerial-sensitivity 1.3`.
 
 It runs on a Mac with Apple silicon (M1 or later, macOS 14 or later), on 64-bit Windows 10 or 11, and on Linux (x86_64 or ARM64), with graphics that support OpenGL 3.3, as any computer from the last ten years does. Intel Macs cannot run it: RocketSim publishes no version for them.
 
@@ -67,7 +68,7 @@ uvx --refresh --from https://github.com/hyruuk/rocketsim-gym/archive/main.zip ro
 
 ## Status
 
-Early. What works today: a whole 1v1 match on the homemade arena against a scripted ball-chasing bot, with Rocket League's match rules, seen from Rocket League's car cam and ball cam with its on-screen display, played with digital or analog controls and the player's own camera and controller settings; the play window; and the Gymnasium env behind both. The arena and the cars are homemade and low-poly. Next, in this order:
+Early. What works today: a whole 1v1, 2v2 or 3v3 match on the homemade arena with scripted bots that take turns at the ball, with Rocket League's match rules, seen from Rocket League's car cam and ball cam with its on-screen display, played with digital or analog controls and the player's own camera and controller settings; the play window; and the Gymnasium env behind both. The arena and the cars are homemade and low-poly. Next, in this order:
 
 1. The real arena, from collision meshes dumped from a Rocket League install.
 
@@ -81,7 +82,7 @@ pip install https://github.com/hyruuk/rocketsim-gym/archive/main.zip
 import gymnasium
 import rocketsim_gym  # registers RocketSimSoccar-v0
 
-env = gymnasium.make("RocketSimSoccar-v0", match_seconds=60)
+env = gymnasium.make("RocketSimSoccar-v0", match_seconds=60, team_size=2)
 observation, info = env.reset(seed=0)
 terminated = False
 while not terminated:
@@ -91,11 +92,11 @@ print(info)  # {'phase': 'ended', 'blue_score': ..., 'orange_score': ...}
 
 ## The env
 
-The agent drives the blue car; a scripted ball-chaser drives the orange one. The bot drives at the ball, aiming a little behind it so that its touch sends the ball toward blue's goal, boosts while it faces the ball and powerslides through sharp turns; it never jumps.
+A match is 1v1, 2v2 or 3v3. The agent drives blue's first car, and scripted bots drive every other one. A team's cars take turns at the ball, as Rocket League players rotate: the car nearest the ball goes for it, a car past the ball counting as farther, and the others wait in line behind it, between the ball and their own goal. The agent's car counts as one of its team's, so its teammates leave the ball to it while it is nearest; in 1v1 the bot is alone on its team and always goes. The car whose turn it is drives at the ball, aiming a little behind it so that its touch sends the ball toward the goal it attacks, boosts while it faces the ball and powerslides through sharp turns; a waiting car drives to its spot and stops there. A bot that pushes on without moving, against a goal post say, backs off, and one stuck on its side or its roof jumps and rolls back onto its wheels; it jumps for nothing else.
 
 The match follows Rocket League's rules: a 3 s countdown holds everything still before each kickoff; the clock starts at the kickoff's first touch; a goal pauses play for 3 s, the ball gone and the cars free to drive, before the next kickoff; when the clock reaches zero, play goes on until the ball touches the ground; a tie goes to overtime, which the next goal wins; a demolished car comes back 3 s later.
 
-**Arguments**: `match_seconds`, the regulation time (300); `ticks_per_step`, physics ticks per step at 120 ticks a second (2, so 60 steps a second); `render_mode`, `"rgb_array"` to draw frames; `render_width` and `render_height`, a frame's size (1024x576); `camera`, the player's camera settings, by the names of Rocket League's settings menu and in its units: `field_of_view` (110), `distance` (270), `height` (100), `angle` (-3), `stiffness` (1) and `transition_speed` (1), each within the menu's range; `input_mode`, `"digital"` (the default) or `"analog"`; `controller`, the player's controller settings for the stick: `deadzone` (0), `steering_sensitivity` (1) and `aerial_sensitivity` (1).
+**Arguments**: `match_seconds`, the regulation time (300); `team_size`, the cars a team: 1, 2 or 3 (1); `ticks_per_step`, physics ticks per step at 120 ticks a second (2, so 60 steps a second); `render_mode`, `"rgb_array"` to draw frames; `render_width` and `render_height`, a frame's size (1024x576); `camera`, the player's camera settings, by the names of Rocket League's settings menu and in its units: `field_of_view` (110), `distance` (270), `height` (100), `angle` (-3), `stiffness` (1) and `transition_speed` (1), each within the menu's range; `input_mode`, `"digital"` (the default) or `"analog"`; `controller`, the player's controller settings for the stick: `deadzone` (0), `steering_sensitivity` (1) and `aerial_sensitivity` (1).
 
 **Action**: a game controller, with Rocket League's default controls. In `"digital"` input mode, twelve buttons, each held or not (`MultiBinary(12)`), sticks and triggers at full deflection, as keys and some scanner controllers give them. In `"analog"` input mode, ten values (`Box(10)`): the triggers and the stick as far as they are pushed, through the player's `controller` settings, and six buttons, each pressed above 0.5. Digital is analog pushed all the way: the same buttons play the same match in either mode. The car obeys its controls except in a countdown and while it is demolished.
 
@@ -131,21 +132,20 @@ Analog:
 | 8 | air_roll_left | 0 to 1 | roll -1 |
 | 9 | air_roll_right | 0 to 1 | roll +1 |
 
-**Observation**: 87 values, in Rocket League's units (uu, uu/s, rad/s).
+**Observation**: in Rocket League's units (uu, uu/s, rad/s), 87 values in 1v1, 127 in 2v2 and 167 in 3v3 (`rocketsim_gym.env.observation_size`), in this order:
 
-| Index | Values |
+| Values | What |
 |---|---|
-| 0-8 | the ball: position, velocity, angular velocity |
-| 9-28 | the blue car: position, velocity, angular velocity, forward direction, up direction, boost (0-100), on the ground, can jump or flip, supersonic, demolished |
-| 29-48 | the orange car, the same |
-| 49-82 | each boost pad, in RocketSim's order: 1 while it can be picked up |
-| 83-86 | seconds left in regulation, blue's goals, orange's goals, 1 in overtime |
+| 9 | the ball: position, velocity, angular velocity |
+| 20 for each car | blue's cars, then orange's, each team's by number, so the agent's comes first: position, velocity, angular velocity, forward direction, up direction, boost (0-100), on the ground, can jump or flip, supersonic, demolished |
+| 34 | each boost pad, in RocketSim's order: 1 while it can be picked up |
+| 4 | seconds left in regulation, blue's goals, orange's goals, 1 in overtime |
 
 **Reward**: +1 for each blue goal, -1 for each orange goal. The episode terminates when the match ends; `info` holds the phase and the score.
 
-**Frames**: with `render_mode="rgb_array"`, `render()` returns the frame of the latest step, as Rocket League's camera behind the blue car sees it, car cam or ball cam (the `ball_cam` button switches), with Rocket League's on-screen display over it: the scoreboard and clock, the boost meter, and the banners (the kickoff countdown, GO!, GOAL!, OVERTIME, the winner, DEMOLISHED). By default the camera hangs 270 uu behind the car and 100 above, looking 3 degrees down, with a 110 degree field of view, as many players set theirs, held rigidly behind the car; on a wall, the wall becomes its floor. The ball casts a shadow straight down, its panels show its spin, and a boosting car trails a flame. The camera moves in `step`, and a frame is drawn once however often it is asked for, so drawing changes nothing in the match. Drawing needs OpenGL 3.3, without a window: EGL on Linux, so no display is needed there.
+**Frames**: with `render_mode="rgb_array"`, `render()` returns the frame of the latest step, as Rocket League's camera behind the agent's car sees it, car cam or ball cam (the `ball_cam` button switches), with Rocket League's on-screen display over it: the scoreboard and clock, the boost meter, and the banners (the kickoff countdown, GO!, GOAL!, OVERTIME, the winner, DEMOLISHED). By default the camera hangs 270 uu behind the car and 100 above, looking 3 degrees down, with a 110 degree field of view, as many players set theirs, held rigidly behind the car; on a wall, the wall becomes its floor. The ball casts a shadow straight down, its panels show its spin, and a boosting car trails a flame. The camera moves in `step`, and a frame is drawn once however often it is asked for, so drawing changes nothing in the match. Drawing needs OpenGL 3.3, without a window: EGL on Linux, so no display is needed there.
 
-**Logging**: `env.unwrapped.sample()` returns the same fields after every step (`rocketsim_gym.env.SAMPLE_FIELDS`): the phase, clock and score, the ball, each car's state, what happened during the step (a goal, each car's touch and demolition) and the controls each car obeyed. `env.unwrapped.provenance()` names what a match depends on besides its seed and actions: the package versions, the collision meshes' SHA-256s, the tick rates and the OpenGL renderer.
+**Logging**: `env.unwrapped.sample()` returns the same fields after every step (`env.unwrapped.sample_fields`): the phase, clock and score, the ball, each car's state, what happened during the step (a goal, each car's touch and demolition) and the controls each car obeyed, each car's fields after its name, from `blue1`, the agent's, to `orange3`. `env.unwrapped.provenance()` names what a match depends on besides its seed and actions: the package versions, the collision meshes' SHA-256s, the cars a team, the tick rates and the OpenGL renderer.
 
 **Replay**: the kickoff and respawn spots come from the env's random generator, seeded by `reset`, and RocketSim's own random kickoffs and respawns are never used. So the same seed and the same actions give the same match, step for step, in any process on the same machine. Floating-point physics is not promised to match across machines.
 
@@ -158,12 +158,12 @@ RocketSim simulates Rocket League's physics but needs the arena's collision mesh
 - `rocketsim_gym.env`: `SoccarEnv`, registered as `RocketSimSoccar-v0`.
 - `rocketsim_gym.match`: the match rules, a state machine told what happened each tick and answering what the arena must do.
 - `rocketsim_gym.controls`: the inputs, digital or analog, and the car controls they make through a player's controller settings.
-- `rocketsim_gym.bot`: the ball-chaser.
+- `rocketsim_gym.bot`: the bots: whose turn it is at the ball, where the others wait, the ball-chaser, and the watch that frees a stuck car.
 - `rocketsim_gym.camera`: car cam and ball cam, the rig behind the car that follows it.
 - `rocketsim_gym.renderer`: draws the frames offscreen with OpenGL (moderngl): the arena the physics uses, the ball, the cars and the boost pads.
 - `rocketsim_gym.hud`: the on-screen display, what it shows at each moment of a match and how it is painted.
 - `rocketsim-play` (`python -m rocketsim_gym.play`): the play window.
-- `rocketsim_gym.engine`: `load_rocketsim(folder, manifest)` loads RocketSim with one folder of meshes per process, after checking every file against its manifest; `SoccarArena` is the 1v1 arena, placed only by setting state and stepped a tick at a time, each tick's goal, touches and demolitions reported.
+- `rocketsim_gym.engine`: `load_rocketsim(folder, manifest)` loads RocketSim with one folder of meshes per process, after checking every file against its manifest; `SoccarArena` is a soccar arena of one car a team or more, placed only by setting state and stepped a tick at a time, each tick's goal, touches and demolitions reported.
 - `rocketsim_gym.arena_geometry`: the homemade arena as one triangle mesh (`build_homemade_soccar_arena`), and RocketSim's collision-mesh files: read, write, their SHA-256 manifest, and RocketSim's own mesh hash. RocketSim adds the floor, a ceiling plane and the side walls itself; the mesh is everything else (the curves into the walls and the ceiling, corner and back walls, the ceiling, the goals). `python -m rocketsim_gym.arena_geometry FOLDER` writes it, as `rocketsim_gym/collision_meshes/homemade/` holds it.
 - `python -m rocketsim_gym.check_collision_meshes FOLDER`: describes each mesh file, loads the folder, measures how the arena plays (rest heights, a shot at each goal, a drive up a wall), and writes the folder's manifest and a report.
 - [DUMPING_COLLISION_MESHES.md](DUMPING_COLLISION_MESHES.md): the brief for dumping Rocket League's own meshes on a Windows PC with the game, for a person or an agent such as Claude Code.
@@ -186,7 +186,7 @@ uv run pytest
 uv run ruff check .
 ```
 
-The tests check the arena's mesh and how RocketSim plays it (rest heights, drives up every kind of wall onto the ceiling, goals, the goal frame, nothing leaving the arena); the match rules, event by event; each button's controls and which way RocketSim turns on them, the analog inputs, the dead zone and the sensitivities, and digital as analog pushed all the way; the bot; the arena's kickoffs, demolitions and respawns; the env: Gymnasium's own checker, whole matches, the logged fields, and a match replayed identically in a second process; the camera and its settings; the frames: where the ball and the cars land on the screen, the shadow, the flames and the ball's spin, that drawing changes nothing, and the same pixels in a second process; the on-screen display, at each moment of a match; and the play window's inputs and options. CI runs them on Linux, macOS and Windows; the frames' tests skip where no OpenGL 3.3 context opens.
+The tests check the arena's mesh and how RocketSim plays it (rest heights, drives up every kind of wall onto the ceiling, goals, the goal frame, nothing leaving the arena); the match rules, event by event; each button's controls and which way RocketSim turns on them, the analog inputs, the dead zone and the sensitivities, and digital as analog pushed all the way; the bots: the chaser, whose turn it is at the ball, where the others wait, and stuck cars coming free; the arena's kickoffs of one to three cars a team, demolitions and respawns; the env, in each team size: Gymnasium's own checker, whole matches, the logged fields, and a match replayed identically in a second process; the camera and its settings; the frames: where the ball and the cars land on the screen, the shadow, the flames and the ball's spin, that drawing changes nothing, and the same pixels in a second process; the on-screen display, at each moment of a match; and the play window's inputs and options. CI runs them on Linux, macOS and Windows; the frames' tests skip where no OpenGL 3.3 context opens.
 
 ## License
 

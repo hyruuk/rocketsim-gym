@@ -74,6 +74,12 @@ def test_camera_settings_out_of_range_stop_the_window_before_it_opens(capsys):
     assert "field_of_view" in capsys.readouterr().err
 
 
+def test_a_team_size_rocket_league_has_no_match_for_stops_the_window_before_it_opens(capsys):
+    with pytest.raises(SystemExit):
+        main(["--team-size", "4"])
+    assert "--team-size" in capsys.readouterr().err
+
+
 def test_analog_inputs_read_the_controller_as_far_as_it_is_pushed():
     controller = FakeController(
         buttons=(pygame.CONTROLLER_BUTTON_A,),

@@ -3,11 +3,12 @@
 import pytest
 
 from rocketsim_gym.match import (COUNTDOWN_TICKS, GOAL_PAUSE_TICKS, RESPAWN_TICKS, ArenaChanges,
-                                 Match, Phase, Team, TickEvents)
+                                 Car, Match, Phase, Team, TickEvents, match_cars)
 
+BLUE1, BLUE2, ORANGE1 = Car(Team.BLUE, 1), Car(Team.BLUE, 2), Car(Team.ORANGE, 1)
 IN_THE_AIR = TickEvents()
 ON_THE_GROUND = TickEvents(ball_on_ground=True)
-TOUCH = TickEvents(touched=(Team.BLUE,))
+TOUCH = TickEvents(touched=(BLUE1,))
 
 
 def advance(match, ticks, events=IN_THE_AIR):
@@ -33,11 +34,11 @@ def score_and_kick_off(match, team):
 def test_a_countdown_holds_everything_for_three_seconds():
     match = Match(1200)
     assert match.phase is Phase.COUNTDOWN and not match.physics_runs
-    assert not match.takes_controls(Team.BLUE)
+    assert not match.takes_controls(BLUE1)
     assert set(advance(match, COUNTDOWN_TICKS - 1, TickEvents())) == {ArenaChanges()}
     assert match.phase is Phase.COUNTDOWN
     match.tick()
-    assert match.phase is Phase.KICKOFF and match.physics_runs and match.takes_controls(Team.BLUE)
+    assert match.phase is Phase.KICKOFF and match.physics_runs and match.takes_controls(BLUE1)
 
 
 def test_events_in_a_countdown_are_refused():
@@ -114,16 +115,40 @@ def test_overtime_counts_up_from_its_first_touch_and_the_next_goal_wins():
 
 def test_a_demolished_car_comes_back_three_seconds_later_and_obeys_no_one_meanwhile():
     match = kicked_off()
-    match.tick(TickEvents(demolished=(Team.ORANGE,)))
-    assert not match.takes_controls(Team.ORANGE) and match.takes_controls(Team.BLUE)
+    match.tick(TickEvents(demolished=(ORANGE1,)))
+    assert not match.takes_controls(ORANGE1) and match.takes_controls(BLUE1)
     changes = advance(match, RESPAWN_TICKS)
-    assert [change.respawn for change in changes if change.respawn] == [(Team.ORANGE,)]
-    assert changes[-1].respawn == (Team.ORANGE,) and match.takes_controls(Team.ORANGE)
+    assert [change.respawn for change in changes if change.respawn] == [(ORANGE1,)]
+    assert changes[-1].respawn == (ORANGE1,) and match.takes_controls(ORANGE1)
+
+
+def test_each_car_of_a_team_comes_back_three_seconds_after_its_own_demolition():
+    match = kicked_off()
+    match.tick(TickEvents(demolished=(BLUE2,)))
+    advance(match, 60)
+    match.tick(TickEvents(demolished=(BLUE1, ORANGE1)))
+    assert not any(match.takes_controls(car) for car in (BLUE1, BLUE2, ORANGE1))
+    changes = advance(match, RESPAWN_TICKS)
+    assert [change.respawn for change in changes if change.respawn] == [(BLUE2,), (BLUE1, ORANGE1)]
+    assert changes.index(ArenaChanges(respawn=(BLUE2,))) == RESPAWN_TICKS - 62
+
+
+def test_a_car_demolished_twice_at_once_is_refused():
+    match = kicked_off()
+    match.tick(TickEvents(demolished=(BLUE2,)))
+    with pytest.raises(ValueError, match="blue2 is demolished already"):
+        match.tick(TickEvents(demolished=(BLUE2,)))
+
+
+def test_the_cars_of_a_match_are_blues_then_oranges_each_by_number():
+    assert [car.name for car in match_cars(3)] == ["blue1", "blue2", "blue3",
+                                                   "orange1", "orange2", "orange3"]
+    assert match_cars(1) == (BLUE1, ORANGE1)
 
 
 def test_a_kickoff_brings_every_demolished_car_back_with_it():
     match = kicked_off()
-    match.tick(TickEvents(goal=Team.ORANGE, demolished=(Team.BLUE,)))
+    match.tick(TickEvents(goal=Team.ORANGE, demolished=(BLUE1,)))
     changes = advance(match, GOAL_PAUSE_TICKS)
     assert changes[-1] == ArenaChanges(kickoff=True)
     assert not any(change.respawn for change in changes) and match.respawn_ticks_left == {}

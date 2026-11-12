@@ -3,11 +3,12 @@
 import numpy as np
 
 from rocketsim_gym.hud import BOOST_FILL, GO_TICKS, TEAM_COLORS, Hud, HudPainter, hud_for
-from rocketsim_gym.match import (COUNTDOWN_TICKS, GOAL_PAUSE_TICKS, TICKS_PER_SECOND, Match,
-                                 Team, TickEvents)
+from rocketsim_gym.match import (COUNTDOWN_TICKS, GOAL_PAUSE_TICKS, TICKS_PER_SECOND, Car,
+                                 Match, Team, TickEvents)
 
 ON_THE_GROUND = TickEvents(ball_on_ground=True)
-TOUCH = TickEvents(touched=(Team.BLUE,))
+BLUE1 = Car(Team.BLUE, 1)
+TOUCH = TickEvents(touched=(BLUE1,))
 WIDTH, HEIGHT = 640, 360
 
 
@@ -59,10 +60,11 @@ def test_a_goal_and_the_winner_take_their_teams_color():
 def test_a_demolished_player_sees_when_their_car_comes_back():
     match = kicked_off(300)
     advance(match, GO_TICKS)
-    match.tick(TickEvents(demolished=(Team.BLUE,)))
+    match.tick(TickEvents(demolished=(BLUE1,)))
     demolished = hud_for(match, 0)
     assert (demolished.banner, demolished.caption) == ("DEMOLISHED", "Back in 3")
-    assert hud_for(match, 0, team=Team.ORANGE).banner == ""
+    assert hud_for(match, 0, Car(Team.ORANGE, 1)).banner == ""
+    assert hud_for(match, 0, Car(Team.BLUE, 2)).banner == ""
 
 
 def _frame():

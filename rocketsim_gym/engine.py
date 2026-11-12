@@ -1,4 +1,4 @@
-"""RocketSim: loaded with one folder of soccar collision meshes per process, and a 1v1 arena.
+"""RocketSim: loaded with one folder of soccar collision meshes per process, and a soccar arena.
 
 RocketSim reads its collision meshes once per process and keeps them for every arena after.
 A file it cannot parse leaves it unusable for the rest of the process, and an arena made
@@ -9,21 +9,21 @@ the meshes are checked here, in full, before RocketSim ever sees them.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import RocketSim
 
 from .arena_geometry import collision_mesh_manifest, read_collision_mesh_file
 from .controls import Controls
-from .match import TEAMS, TICKS_PER_SECOND, Team, TickEvents
+from .match import TICKS_PER_SECOND, Car, Team, TickEvents, match_cars
 
 #: The folder RocketSim was loaded from in this process, once it has been.
 _loaded_collision_meshes_folder: Path | None = None
 
-#: The kickoff spots, each with its mirror image for the orange car.
+#: Blue's kickoff spots, each with its mirror image for orange.
 KICKOFF_SPOT_COUNT = len(RocketSim.RLConst.CAR_SPAWN_LOCATIONS_SOCCAR)
-#: The spots a demolished car comes back at, each with its mirror image for the orange car.
+#: Blue's spots a demolished car comes back at, each with its mirror image for orange.
 RESPAWN_SPOT_COUNT = len(RocketSim.RLConst.CAR_RESPAWN_LOCATIONS_SOCCAR)
 #: Where the ball waits out the pause after a goal: in the void behind a corner wall, short of
 #: the goal lines and out of every car's reach. A ball without velocity stays where it is set.
@@ -94,33 +94,43 @@ def new_soccar_arena(tick_rate: float = 120.0) -> RocketSim.Arena:
 
 
 class SoccarArena:
-    """A 1v1 soccar arena: the ball, a blue Octane and an orange Octane, stepped a tick at a time.
+    """A soccar arena: the ball and ``team_size`` Octanes a team, stepped a tick at a time.
 
     The cars and the ball are only ever placed by setting their state. RocketSim's own kickoff
     and respawn draw from a clock-seeded random generator, so this arena never lets it run
     either; whoever drives it picks the spots.
+
+    :param team_size: cars a team, at most one per kickoff spot.
+    :raises ValueError: ``team_size`` is not a whole number from 1 to the kickoff spots.
+    :ivar cars: its cars, blue's then orange's (:func:`~rocketsim_gym.match.match_cars`).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, team_size: int = 1) -> None:
+        if (isinstance(team_size, bool) or not isinstance(team_size, int)
+                or not 1 <= team_size <= KICKOFF_SPOT_COUNT):
+            raise ValueError(f"team_size {team_size!r}: a whole number of cars a team, from 1 to "
+                             f"{KICKOFF_SPOT_COUNT}, one per kickoff spot")
         self._arena = new_soccar_arena(TICKS_PER_SECOND)
         mutator = self._arena.get_mutator_config()
         mutator.respawn_delay = _NEVER_SECONDS
         self._arena.set_mutator_config(mutator)
         self._spawn_boost = mutator.car_spawn_boost_amount
         self._goal_line_y = mutator.goal_base_threshold_y + mutator.ball_radius
-        self._cars = {team: self._arena.add_car(_ROCKETSIM_TEAMS[team], RocketSim.CarConfig.OCTANE)
-                      for team in TEAMS}
+        self.cars = match_cars(team_size)
+        self._rocketsim_cars = {
+            car: self._arena.add_car(_ROCKETSIM_TEAMS[car.team], RocketSim.CarConfig.OCTANE)
+            for car in self.cars}
         self._pads = self._arena.get_boost_pads()
-        self._demolished = dict.fromkeys(TEAMS, False)
+        self._demolished = dict.fromkeys(self.cars, False)
 
     @property
     def ball(self) -> RocketSim.BallState:
         """The ball's state."""
         return self._arena.ball.get_state()
 
-    def car(self, team: Team) -> RocketSim.CarState:
-        """``team``'s car's state."""
-        return self._cars[team].get_state()
+    def car(self, car: Car) -> RocketSim.CarState:
+        """``car``'s state."""
+        return self._rocketsim_cars[car].get_state()
 
     def pads_active(self) -> tuple[bool, ...]:
         """For each boost pad, in RocketSim's order, whether it can be picked up."""
@@ -130,12 +140,20 @@ class SoccarArena:
         """Each boost pad's position (uu) and whether it is big, in RocketSim's order."""
         return tuple((pad.get_pos().as_tuple(), pad.is_big) for pad in self._pads)
 
-    def place_for_kickoff(self, spot: int) -> None:
-        """Set up a kickoff: both cars at kickoff spot ``spot`` (mirrored for orange) with the
-        spawn boost, the ball at rest at the centre, and every boost pad up."""
-        x, y, yaw = RocketSim.RLConst.CAR_SPAWN_LOCATIONS_SOCCAR[spot]
-        for team in TEAMS:
-            self._place_car(team, x, y, RocketSim.RLConst.CAR_SPAWN_REST_Z, yaw, on_ground=True)
+    def place_for_kickoff(self, spots: Sequence[int]) -> None:
+        """Set up a kickoff: each team's car number n at kickoff spot ``spots[n - 1]`` (mirrored
+        for orange) with the spawn boost, the ball at rest at the centre, and every boost pad up.
+
+        :raises ValueError: ``spots`` are not as many different kickoff spots as a team's cars.
+        """
+        team_size = len(self.cars) // 2
+        if (len(spots) != team_size or len(set(spots)) != team_size
+                or not all(0 <= spot < KICKOFF_SPOT_COUNT for spot in spots)):
+            raise ValueError(f"kickoff spots {list(spots)}: {team_size} different ones, each "
+                             f"from 0 to {KICKOFF_SPOT_COUNT - 1}")
+        for car in self.cars:
+            x, y, yaw = RocketSim.RLConst.CAR_SPAWN_LOCATIONS_SOCCAR[spots[car.number - 1]]
+            self._place_car(car, x, y, RocketSim.RLConst.CAR_SPAWN_REST_Z, yaw, on_ground=True)
         self._arena.ball.set_state(RocketSim.BallState())
         for pad in self._pads:
             pad.set_state(RocketSim.BoostPadState(is_active=True, cooldown=0.0))
@@ -144,15 +162,15 @@ class SoccarArena:
         """Take the ball out of play: at rest behind a corner wall, until the next kickoff."""
         self._arena.ball.set_state(RocketSim.BallState(pos=RocketSim.Vec(*BALL_PARKING_POSITION)))
 
-    def respawn(self, team: Team, spot: int) -> None:
-        """Bring ``team``'s car back at respawn spot ``spot`` (mirrored for orange), with the
-        spawn boost."""
+    def respawn(self, car: Car, spot: int) -> None:
+        """Bring ``car`` back at respawn spot ``spot`` (mirrored for orange), with the spawn
+        boost."""
         x, y, yaw = RocketSim.RLConst.CAR_RESPAWN_LOCATIONS_SOCCAR[spot]
-        self._place_car(team, x, y, RocketSim.RLConst.CAR_RESPAWN_Z, yaw, on_ground=False)
+        self._place_car(car, x, y, RocketSim.RLConst.CAR_RESPAWN_Z, yaw, on_ground=False)
 
-    def set_controls(self, team: Team, controls: Controls) -> None:
-        """The controls ``team``'s car takes from the next tick on."""
-        self._cars[team].set_controls(RocketSim.CarControls(
+    def set_controls(self, car: Car, controls: Controls) -> None:
+        """The controls ``car`` takes from the next tick on."""
+        self._rocketsim_cars[car].set_controls(RocketSim.CarControls(
             throttle=controls.throttle, steer=controls.steer, pitch=controls.pitch,
             yaw=controls.yaw, roll=controls.roll, jump=controls.jump, boost=controls.boost,
             handbrake=controls.handbrake))
@@ -161,14 +179,14 @@ class SoccarArena:
         """Step one tick, and say what happened in it."""
         self._arena.step(1)
         touched, demolished = [], []
-        for team in TEAMS:
-            state = self._cars[team].get_state()
+        for car in self.cars:
+            state = self._rocketsim_cars[car].get_state()
             hit = state.ball_hit_info
             if hit.is_valid and hit.tick_count_when_hit == self._arena.tick_count - 1:
-                touched.append(team)
-            if state.is_demoed and not self._demolished[team]:
-                demolished.append(team)
-            self._demolished[team] = state.is_demoed
+                touched.append(car)
+            if state.is_demoed and not self._demolished[car]:
+                demolished.append(car)
+            self._demolished[car] = state.is_demoed
         position = self._arena.ball.get_state().pos
         goal = None
         if abs(position.y) > self._goal_line_y:
@@ -176,11 +194,11 @@ class SoccarArena:
         return TickEvents(goal=goal, touched=tuple(touched), demolished=tuple(demolished),
                           ball_on_ground=position.z <= BALL_ON_GROUND_MAXIMUM_Z)
 
-    def _place_car(self, team: Team, x: float, y: float, z: float, yaw: float,
+    def _place_car(self, car: Car, x: float, y: float, z: float, yaw: float,
                    on_ground: bool) -> None:
-        if team is Team.ORANGE:
+        if car.team is Team.ORANGE:
             x, y, yaw = -x, -y, yaw + math.pi
-        self._cars[team].set_state(RocketSim.CarState(
+        self._rocketsim_cars[car].set_state(RocketSim.CarState(
             pos=RocketSim.Vec(x, y, z), rot_mat=RocketSim.Angle(yaw, 0, 0).as_rot_mat(),
             boost=self._spawn_boost, is_on_ground=on_ground))
-        self._demolished[team] = False
+        self._demolished[car] = False

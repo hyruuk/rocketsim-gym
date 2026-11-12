@@ -14,7 +14,7 @@ from gymnasium.utils.env_checker import check_env
 import rocketsim_gym  # noqa: F401  (registers RocketSimSoccar-v0)
 from rocketsim_gym.arena_geometry import HOMEMADE_ARENA_FOLDER, MANIFEST_FILE_NAME, read_manifest
 from rocketsim_gym.controls import ANALOG_HIGH, ANALOG_LOW, BUTTON_COUNT, Button, analog_from_buttons
-from rocketsim_gym.env import OBSERVATION_SIZE, SAMPLE_FIELDS, SoccarEnv
+from rocketsim_gym.env import TEAM_SIZES, SoccarEnv, observation_size, sample_fields
 from rocketsim_gym.match import COUNTDOWN_TICKS
 
 IDLE = np.zeros(BUTTON_COUNT, np.int8)
@@ -32,10 +32,18 @@ def test_it_passes_gymnasiums_env_checker():
     check_env(SoccarEnv(match_seconds=5), skip_render_check=True)
 
 
-def test_gymnasium_makes_it_by_its_id():
-    env = gymnasium.make("RocketSimSoccar-v0", match_seconds=5)
+@pytest.mark.filterwarnings("ignore:.*Box observation space m")
+@pytest.mark.parametrize("team_size", [2, 3])
+def test_a_team_match_passes_gymnasiums_env_checker(team_size):
+    check_env(SoccarEnv(match_seconds=5, team_size=team_size), skip_render_check=True)
+
+
+@pytest.mark.parametrize("team_size, size", [(1, 87), (2, 127), (3, 167)])
+def test_gymnasium_makes_it_by_its_id_in_each_team_size(team_size, size):
+    env = gymnasium.make("RocketSimSoccar-v0", match_seconds=5, team_size=team_size)
     observation, _ = env.reset(seed=0)
-    assert observation.shape == (OBSERVATION_SIZE,) and observation.dtype == np.float32
+    assert observation.shape == (size,) == (observation_size(team_size),)
+    assert observation.dtype == np.float32
 
 
 def test_a_match_starts_with_a_kickoff_that_the_countdown_holds_still():
@@ -51,7 +59,7 @@ def test_a_match_starts_with_a_kickoff_that_the_countdown_holds_still():
     assert np.array_equal(observation, first) and info["phase"] == "kickoff"
     for _ in range(30):
         observation, _, _, _, info = env.step(full_speed)
-    assert np.linalg.norm(observation[12:14]) > 500 and env.sample()["blue_input_throttle"] == 1
+    assert np.linalg.norm(observation[12:14]) > 500 and env.sample()["blue1_input_throttle"] == 1
 
 
 @pytest.mark.parametrize("ticks_per_step", [1, 2, 8])
@@ -80,18 +88,50 @@ def test_ball_cam_switches_on_each_press_not_while_held():
     assert switches == [False, False, False, True]
 
 
-def test_sample_logs_the_same_fields_every_step_and_the_controls_each_car_obeyed():
-    env = SoccarEnv()
+@pytest.mark.parametrize("team_size", TEAM_SIZES)
+def test_sample_logs_the_same_fields_every_step_and_the_controls_each_car_obeyed(team_size):
+    env = SoccarEnv(team_size=team_size)
     env.reset(seed=0)
     throttle = press(Button.THROTTLE)
     for step in range(COUNTDOWN_TICKS // 2 + 5):
         env.step(throttle)
         sample = env.sample()
-        assert tuple(sample) == SAMPLE_FIELDS
+        assert tuple(sample) == env.sample_fields == sample_fields(team_size)
         assert all(isinstance(value, (str, bool, int, float)) for value in sample.values())
         in_countdown = step < COUNTDOWN_TICKS // 2
-        assert sample["blue_input_throttle"] == (0 if in_countdown else 1)
-        assert sample["orange_input_throttle"] == (0 if in_countdown else 1)
+        assert sample["blue1_input_throttle"] == (0 if in_countdown else 1)
+        assert sample["orange1_input_throttle"] == (0 if in_countdown else 1)
+
+
+def test_each_car_is_logged_under_its_name():
+    fields = sample_fields(3)
+    for car in ("blue1", "blue2", "blue3", "orange1", "orange2", "orange3"):
+        assert f"{car}_x" in fields and f"{car}_input_throttle" in fields
+    per_pair_of_cars = len(sample_fields(2)) - len(sample_fields(1))
+    assert len(sample_fields(3)) - len(sample_fields(2)) == per_pair_of_cars
+
+
+@pytest.mark.parametrize("team_size", [2, 3])
+def test_a_team_kickoff_puts_each_car_at_a_different_spot_mirrored_for_orange(team_size):
+    for seed in range(4):
+        env = SoccarEnv(team_size=team_size)
+        observation = env.reset(seed=seed)[0]
+        cars = observation[9:9 + 2 * team_size * 20].reshape(2 * team_size, 20)
+        blue, orange = cars[:team_size, :2], cars[team_size:, :2]
+        assert len({tuple(spot) for spot in blue}) == team_size
+        assert orange == pytest.approx(-blue)
+
+
+@pytest.mark.parametrize("team_size", [2, 3])
+def test_a_team_match_against_the_bots_ends_and_its_rewards_add_up_to_the_score(team_size):
+    env = SoccarEnv(match_seconds=20, team_size=team_size)
+    env.reset(seed=2)
+    total, terminated = 0.0, False
+    while not terminated:
+        _, reward, terminated, _, info = env.step(IDLE)
+        total += reward
+    assert info["phase"] == "ended" and info["blue_score"] != info["orange_score"]
+    assert total == info["blue_score"] - info["orange_score"]
 
 
 def test_provenance_names_the_versions_and_the_meshes():
@@ -100,10 +140,13 @@ def test_provenance_names_the_versions_and_the_meshes():
     assert provenance["rocketsim_version"] == "2.2.1"
     assert (provenance["ticks_per_second"], provenance["ticks_per_step"]) == (120, 2)
     assert SoccarEnv(camera={"distance": 300}).provenance()["camera"]["distance"] == 300
+    assert SoccarEnv(team_size=3).provenance()["team_size"] == 3
 
 
 @pytest.mark.parametrize("arguments", [
     {"match_seconds": 0}, {"match_seconds": -5}, {"match_seconds": True}, {"match_seconds": "300"},
+    {"team_size": 0}, {"team_size": 4}, {"team_size": 2.0}, {"team_size": True},
+    {"team_size": "2"},
     {"ticks_per_step": 0}, {"ticks_per_step": 1.5}, {"ticks_per_step": True},
     {"render_mode": "human"}, {"render_width": 0}, {"render_height": 72.5},
     {"camera": {"field_of_view": 130}}, {"camera": {"swivel_speed": 5}},
@@ -133,10 +176,12 @@ def test_the_same_seed_and_actions_play_the_same_match_and_seeds_vary_the_kickof
 
 _MATCH_DIGEST = textwrap.dedent("""
     import hashlib
+    import sys
     import numpy as np
     from rocketsim_gym.env import SoccarEnv
 
-    env, actions = SoccarEnv(match_seconds=30), np.random.default_rng(7)
+    env = SoccarEnv(match_seconds=30, team_size=int(sys.argv[1]))
+    actions = np.random.default_rng(7)
     digest = hashlib.sha256(env.reset(seed=3)[0].tobytes())
     terminated = False
     while not terminated:
@@ -146,9 +191,11 @@ _MATCH_DIGEST = textwrap.dedent("""
 """)
 
 
-def test_a_match_replays_identically_in_another_process():
-    runs = [subprocess.run([sys.executable, "-c", _MATCH_DIGEST], capture_output=True, text=True,
-                           check=True, env={**os.environ, "PYTHONHASHSEED": hash_seed}).stdout
+@pytest.mark.parametrize("team_size", [1, 3])
+def test_a_match_replays_identically_in_another_process(team_size):
+    runs = [subprocess.run([sys.executable, "-c", _MATCH_DIGEST, str(team_size)],
+                           capture_output=True, text=True, check=True,
+                           env={**os.environ, "PYTHONHASHSEED": hash_seed}).stdout
             for hash_seed in ("1", "2")]
     assert runs[0] == runs[1]
     _, blue_score, orange_score = runs[0].split()

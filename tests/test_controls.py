@@ -11,7 +11,7 @@ from rocketsim_gym.controls import (ANALOG_INPUT_COUNT, BUTTON_COUNT, AnalogInpu
                                     buttons_from_action, controls_from_buttons, controls_from_pad,
                                     pad_from_analog)
 from rocketsim_gym.engine import SoccarArena
-from rocketsim_gym.match import Team
+from rocketsim_gym.match import Car, Team
 
 
 def pressed(*buttons):
@@ -60,13 +60,14 @@ def test_anything_else_is_refused(action):
 def _car_after(buttons, ticks, airborne):
     """A blue car facing +y, after ``ticks`` ticks holding ``buttons``: its state before and after."""
     arena = SoccarArena()
-    arena.place_for_kickoff(4)
-    car = arena._cars[Team.BLUE]
+    arena.place_for_kickoff((4,))
+    blue = Car(Team.BLUE, 1)
+    car = arena._rocketsim_cars[blue]
     car.set_state(rs.CarState(pos=rs.Vec(0, -2000, 1000 if airborne else 17),
                               vel=rs.Vec(0, 0 if airborne else 1000, 0),
                               rot_mat=rs.Angle(math.pi / 2, 0, 0).as_rot_mat()))
     before = car.get_state()
-    arena.set_controls(Team.BLUE, controls_from_buttons(pressed(*buttons)))
+    arena.set_controls(blue, controls_from_buttons(pressed(*buttons)))
     for _ in range(ticks):
         arena.tick()
     return before, car.get_state()
@@ -167,10 +168,10 @@ def test_controller_settings_out_of_range_are_refused(setting):
 def test_half_throttle_drives_slower_than_full_throttle():
     def speed_after_a_second(throttle):
         arena = SoccarArena()
-        arena.place_for_kickoff(4)
-        arena.set_controls(Team.BLUE, Controls(throttle=throttle))
+        arena.place_for_kickoff((4,))
+        arena.set_controls(Car(Team.BLUE, 1), Controls(throttle=throttle))
         for _ in range(120):
             arena.tick()
-        return np.linalg.norm(arena.car(Team.BLUE).vel.as_numpy())
+        return np.linalg.norm(arena.car(Car(Team.BLUE, 1)).vel.as_numpy())
 
     assert 100 < speed_after_a_second(0.5) < speed_after_a_second(1.0) - 100

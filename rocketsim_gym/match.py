@@ -1,4 +1,4 @@
-"""The rules of a 1v1 soccar match, advanced one physics tick at a time.
+"""The rules of a soccar match, 1v1, 2v2 or 3v3, advanced one physics tick at a time.
 
 A :class:`Match` knows the clock, the score, and what follows a goal, a demolition or the end of
 time; it knows nothing of physics. Each tick it is told what happened in the arena
@@ -39,6 +39,25 @@ class Team(Enum):
 TEAMS = (Team.BLUE, Team.ORANGE)
 
 
+@dataclass(frozen=True)
+class Car:
+    """One of a match's cars: its team, and its number in the team, from 1."""
+
+    team: Team
+    number: int
+
+    @property
+    def name(self) -> str:
+        """The team and the number, as logs write them: ``blue1``."""
+        return f"{self.team.value}{self.number}"
+
+
+def match_cars(team_size: int) -> tuple[Car, ...]:
+    """Every car of a match of ``team_size`` cars a team, in the order everything goes through
+    them: blue's, then orange's, each team's by number."""
+    return tuple(Car(team, number) for team in TEAMS for number in range(1, team_size + 1))
+
+
 class Phase(Enum):
     """Where a match is."""
 
@@ -59,14 +78,14 @@ class TickEvents:
     """What happened in the arena during one physics tick.
 
     :ivar goal: the team that scored, when the ball crossed a goal line.
-    :ivar touched: the teams whose car touched the ball.
-    :ivar demolished: the teams whose car was demolished.
+    :ivar touched: the cars that touched the ball.
+    :ivar demolished: the cars that were demolished.
     :ivar ball_on_ground: whether the ball is on the floor.
     """
 
     goal: Team | None = None
-    touched: tuple[Team, ...] = ()
-    demolished: tuple[Team, ...] = ()
+    touched: tuple[Car, ...] = ()
+    demolished: tuple[Car, ...] = ()
     ball_on_ground: bool = False
 
 
@@ -74,15 +93,15 @@ class TickEvents:
 class ArenaChanges:
     """What the arena must do after a tick.
 
-    :ivar kickoff: set up a kickoff: both cars at a kickoff spot, the ball at the centre, every
+    :ivar kickoff: set up a kickoff: every car at a kickoff spot, the ball at the centre, every
         boost pad up.
     :ivar remove_ball: take the ball out of play until that kickoff.
-    :ivar respawn: the teams whose demolished car comes back now, at a respawn spot.
+    :ivar respawn: the demolished cars that come back now, each at a respawn spot.
     """
 
     kickoff: bool = False
     remove_ball: bool = False
-    respawn: tuple[Team, ...] = ()
+    respawn: tuple[Car, ...] = ()
 
 
 class Match:
@@ -116,7 +135,7 @@ class Match:
         self.score = dict.fromkeys(TEAMS, 0)
         self.last_goal: Team | None = None
         self.ticks_since_go = 0
-        self.respawn_ticks_left: dict[Team, int] = {}
+        self.respawn_ticks_left: dict[Car, int] = {}
 
     @property
     def physics_runs(self) -> bool:
@@ -130,9 +149,9 @@ class Match:
             return None
         return max(TEAMS, key=self.score.__getitem__)
 
-    def takes_controls(self, team: Team) -> bool:
-        """Whether ``team``'s car obeys its controls: not in a countdown, not while demolished."""
-        return self.physics_runs and team not in self.respawn_ticks_left
+    def takes_controls(self, car: Car) -> bool:
+        """Whether ``car`` obeys its controls: not in a countdown, not while demolished."""
+        return self.physics_runs and car not in self.respawn_ticks_left
 
     def tick(self, events: TickEvents = TickEvents()) -> ArenaChanges:
         """Advance one tick on what happened in it, and say what the arena must do next.
@@ -169,7 +188,7 @@ class Match:
             return self._finish()
         return ArenaChanges(respawn=respawn)
 
-    def _advance_clock(self, touched: tuple[Team, ...]) -> None:
+    def _advance_clock(self, touched: tuple[Car, ...]) -> None:
         """The kickoff's first touch starts the clock; from the next tick on, it runs."""
         if self.phase is Phase.KICKOFF:
             if touched:
@@ -179,20 +198,19 @@ class Match:
         elif self.clock_ticks_left > 0:
             self.clock_ticks_left -= 1
 
-    def _advance_respawns(self, demolished: tuple[Team, ...]) -> tuple[Team, ...]:
+    def _advance_respawns(self, demolished: tuple[Car, ...]) -> tuple[Car, ...]:
         """Count down the demolished cars' wait, start it for the cars just demolished, and
-        return the cars whose wait is over."""
+        return the cars whose wait is over, in the order they were demolished."""
         due = []
-        for team in TEAMS:
-            if team in self.respawn_ticks_left:
-                self.respawn_ticks_left[team] -= 1
-                if self.respawn_ticks_left[team] == 0:
-                    del self.respawn_ticks_left[team]
-                    due.append(team)
-        for team in demolished:
-            if team in self.respawn_ticks_left:
-                raise ValueError(f"the {team.value} car is demolished already")
-            self.respawn_ticks_left[team] = RESPAWN_TICKS
+        for car in tuple(self.respawn_ticks_left):
+            self.respawn_ticks_left[car] -= 1
+            if self.respawn_ticks_left[car] == 0:
+                del self.respawn_ticks_left[car]
+                due.append(car)
+        for car in demolished:
+            if car in self.respawn_ticks_left:
+                raise ValueError(f"{car.name} is demolished already")
+            self.respawn_ticks_left[car] = RESPAWN_TICKS
         return tuple(due)
 
     def _finish(self) -> ArenaChanges:
