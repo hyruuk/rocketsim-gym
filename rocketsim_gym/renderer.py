@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import math
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import Any, TypeVar
 
 import moderngl
 import numpy as np
@@ -20,6 +22,8 @@ import numpy as np
 from .arena_geometry import TriangleMesh
 from .camera import Camera
 from .match import Team
+
+T = TypeVar("T")
 
 #: Samples per pixel for anti-aliasing.
 SAMPLES = 4
@@ -121,6 +125,12 @@ class Renderer:
     :param pads: each boost pad's position (uu) and whether it is big, in RocketSim's order.
     :raises ValueError: a size is not a positive whole number.
     :raises RuntimeError: no OpenGL 3.3 context opens on this machine.
+
+    Its OpenGL context lives on a thread of its own, where every OpenGL call it makes runs. A
+    thread has one current context at a time, so drawing on the caller's thread would take it
+    from whatever else draws there: on Linux, the EGL context made current while drawing leaves
+    a window's own GLX context (an SDL renderer's, say) no longer current, and the window stops
+    showing what it is given.
     """
 
     def __init__(self, width: int, height: int, arena_meshes: Sequence[TriangleMesh],
@@ -130,6 +140,41 @@ class Renderer:
                 raise ValueError(f"{name} {size!r}: a frame's size is a positive whole number")
         self.width, self.height = width, height
         self._pads = tuple((np.array(position, float), big) for position, big in pads)
+        self._gl_thread = ThreadPoolExecutor(1, thread_name_prefix="rocketsim-gym-opengl")
+        try:
+            self._on_gl_thread(self._open, arena_meshes)
+        except BaseException:
+            self._gl_thread.shutdown()
+            raise
+        # Every shape is drawn once now, so that whatever a driver does on a shape's first draw
+        # is over before any frame is asked for.
+        cars = tuple(CarPose(team, (0.0, 0.0, 17.0), (0.0, 1.0, 0.0), (-1.0, 0.0, 0.0),
+                             (0.0, 0.0, 1.0), boosting=True) for team in Team)
+        self.draw(Scene(Camera((0.0, -1000.0, 300.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0), 110.0),
+                        (0.0, 0.0, 200.0), cars, (True,) * len(self._pads)))
+
+    def draw(self, scene: Scene) -> np.ndarray:
+        """The frame of ``scene``: ``(height, width, 3)`` RGB bytes, top row first.
+
+        :raises ValueError: the scene's boost pads are not the renderer's.
+        """
+        if len(scene.pads_active) != len(self._pads):
+            raise ValueError(f"the scene has {len(scene.pads_active)} boost pads, the arena "
+                             f"{len(self._pads)}")
+        return self._on_gl_thread(self._draw, scene)
+
+    def close(self) -> None:
+        """Free the OpenGL context and everything in it."""
+        self._on_gl_thread(self._context.release)
+        self._gl_thread.shutdown()
+
+    def _on_gl_thread(self, function: Callable[..., T], *args: Any) -> T:
+        """``function(*args)``, called on the renderer's OpenGL thread."""
+        return self._gl_thread.submit(function, *args).result()
+
+    def _open(self, arena_meshes: Sequence[TriangleMesh]) -> None:
+        """Open the OpenGL context and load the arena and every shape into it."""
+        width, height = self.width, self.height
         try:
             self._context = _standalone_context()
         except Exception as error:
@@ -152,22 +197,10 @@ class Renderer:
                 depth_attachment=context.depth_renderbuffer((width, height), samples=SAMPLES))
             self._resolved = context.framebuffer(
                 color_attachments=[context.renderbuffer((width, height), 4)])
-        self.gl_renderer = context.info["GL_RENDERER"]
-        # Every shape is drawn once now, so that whatever a driver does on a shape's first draw
-        # is over before any frame is asked for.
-        cars = tuple(CarPose(team, (0.0, 0.0, 17.0), (0.0, 1.0, 0.0), (-1.0, 0.0, 0.0),
-                             (0.0, 0.0, 1.0), boosting=True) for team in Team)
-        self.draw(Scene(Camera((0.0, -1000.0, 300.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0), 110.0),
-                        (0.0, 0.0, 200.0), cars, (True,) * len(self._pads)))
+            # Read while the context is current: outside it, the name comes back empty.
+            self.gl_renderer = context.info["GL_RENDERER"]
 
-    def draw(self, scene: Scene) -> np.ndarray:
-        """The frame of ``scene``: ``(height, width, 3)`` RGB bytes, top row first.
-
-        :raises ValueError: the scene's boost pads are not the renderer's.
-        """
-        if len(scene.pads_active) != len(self._pads):
-            raise ValueError(f"the scene has {len(scene.pads_active)} boost pads, the arena "
-                             f"{len(self._pads)}")
+    def _draw(self, scene: Scene) -> np.ndarray:
         context = self._context
         with context:
             self._framebuffer.use()
@@ -202,10 +235,6 @@ class Renderer:
             context.finish()
             pixels = self._resolved.read(components=3, alignment=1)
         return np.frombuffer(pixels, np.uint8).reshape(self.height, self.width, 3)[::-1].copy()
-
-    def close(self) -> None:
-        """Free the OpenGL context and everything in it."""
-        self._context.release()
 
     def _vertex_array(self, vertices: np.ndarray) -> moderngl.VertexArray:
         buffer = self._context.buffer(vertices.astype("f4").tobytes())

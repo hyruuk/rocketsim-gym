@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import threading
 
 import numpy as np
 import pytest
@@ -88,6 +89,21 @@ def test_cars_are_drawn_in_their_team_color_unless_demolished(renderer):
 def test_a_scene_with_other_boost_pads_is_refused(renderer):
     with pytest.raises(ValueError, match="boost pads"):
         renderer.draw(Scene(CAMERA, None, (), NO_PADS[:-1]))
+
+
+def test_the_renderer_names_the_opengl_renderer(renderer):
+    assert renderer.gl_renderer
+
+
+def test_opengl_runs_off_the_callers_thread(renderer, monkeypatch):
+    # A window drawn with OpenGL on the caller's thread (rocketsim-play's, through SDL) stops
+    # showing frames on Linux when another context is made current there.
+    threads = []
+    draw = renderer._draw
+    monkeypatch.setattr(renderer, "_draw",
+                        lambda scene: threads.append(threading.get_ident()) or draw(scene))
+    renderer.draw(Scene(CAMERA, None, (), NO_PADS))
+    assert threads and threads[0] != threading.get_ident()
 
 
 @pytest.mark.parametrize("size", [(0, 180), (320, -1), (320.5, 180), (True, 180)])
