@@ -46,10 +46,18 @@ def _drawn(renderer, ball=None, cars=()):
 
 def _around(changed, row, column, reach=30):
     """``changed`` within ``reach`` pixels of ``(row, column)``. GitHub's macOS runner, a
-    virtual machine, also changes a few pixels of the ceiling when it draws the ball."""
+    virtual machine, also changes a patch of the ceiling or the floor when it draws the ball."""
     around = np.zeros_like(changed)
     around[max(0, row - reach):row + reach + 1, max(0, column - reach):column + reach + 1] = True
     return changed & around
+
+
+def _ball_coloured(changed, frame):
+    """``changed`` where ``frame`` has the ball's light grey: not the green floor, the ball's
+    shadow, or the dark ceiling, whatever patch of them a virtual machine redraws."""
+    channels = frame.astype(int)
+    grey = channels.max(axis=2) - channels.min(axis=2) < 40
+    return changed & grey & (channels.min(axis=2) > 70)
 
 
 def test_a_frame_has_the_size_asked_for(renderer):
@@ -58,11 +66,11 @@ def test_a_frame_has_the_size_asked_for(renderer):
 
 
 def test_the_ball_ahead_is_at_the_centre_of_the_screen(renderer):
-    changed = _drawn(renderer, ball=(0.0, 0.0, 150.0))[0]
-    rows, columns = np.nonzero(_around(changed, HEIGHT // 2, WIDTH // 2))
+    changed, frame = _drawn(renderer, ball=(0.0, 0.0, 150.0))
+    rows, columns = np.nonzero(_ball_coloured(_around(changed, HEIGHT // 2, WIDTH // 2), frame))
     where = f"{len(columns)} pixels changed, rows {rows.min()}-{rows.max()}, columns {columns.min()}-{columns.max()}"
     assert len(columns) > 50, where
-    assert abs(columns.mean() - WIDTH / 2) < 2 and abs(rows.mean() - HEIGHT / 2) < 2, where
+    assert abs(np.median(columns) - WIDTH / 2) < 2 and abs(np.median(rows) - HEIGHT / 2) < 2, where
 
 
 def test_the_screens_right_is_the_cars_right(renderer):
