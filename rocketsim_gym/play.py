@@ -5,7 +5,7 @@ network, 1v1, 2v2 or 3v3.
                    [--deadzone 0.1] [--steering-sensitivity 1] [--aerial-sensitivity 1]
                    [--field-of-view 110] [--distance 270] [--height 100] [--angle -3]
                    [--stiffness 1] [--transition-speed 1]
-                   [--join [ADDRESS] [--seat SEAT] [--seats SEAT,SEAT...]]
+                   [--join [ADDRESS] [--seat SEAT] [--seats SEAT,SEAT...]] [--stats]
 
 With ``--join``, the window joins the match a ``rocketsim-server`` plays on this network (the one
 at ADDRESS, HOST or HOST:PORT, if given): in the seat ``--seat`` names, or the first free one, of
@@ -34,15 +34,21 @@ air roll right    E
 ================  ====================  ==============
 
 Esc quits; when the match is over, Enter plays another (in a LAN match, once every seat's
-player is ready).
+player is ready). F3 (fn+F3 on most Mac keyboards) or the controller's Back button shows and hides
+the stats in the window's corner: the frames shown a second and the slowest, and in a LAN match the
+input delay, the server's frames shown twice or skipped, and the room's and the connection's state.
+``--stats`` shows them from the start. They are drawn over the window, never into the game's
+frames.
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import sys
 import time
+from collections import deque
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
@@ -73,6 +79,12 @@ KEYS = {
 }
 #: Each mouse button, by its index in ``pygame.mouse.get_pressed()``, and the button it holds.
 MOUSE = {0: Button.BOOST, 2: Button.JUMP}
+#: The key and the controller button that show and hide the stats.
+STATS_KEY, STATS_BUTTON = pygame.K_F3, pygame.CONTROLLER_BUTTON_BACK
+#: How often the stats' text changes, so that it can be read (s).
+STATS_REFRESH_SECONDS = 0.5
+#: The span the stats count the server's frames shown twice or skipped over (s).
+SMOOTHNESS_SECONDS = 10.0
 #: Each controller button, and the button it holds.
 CONTROLLER_BUTTONS = {
     pygame.CONTROLLER_BUTTON_A: Button.JUMP,
@@ -158,6 +170,74 @@ def pad_inputs(keys_held: Mapping[int, bool] | Sequence[bool], mouse_held: Seque
         if controller.get_button(sdl_button):
             action[AnalogInput[button.name]] = 1.0
     return action
+
+
+class PlayStats:
+    """What the play window measures of the frames it shows: how many it showed over the last
+    second, and the longest gap between two; in a LAN match, the input delay over the last
+    second, and the server's frames shown twice or skipped over the last
+    :data:`SMOOTHNESS_SECONDS`.
+
+    :param frame_seconds: a frame's time, which turns frames of delay into milliseconds.
+    """
+
+    def __init__(self, frame_seconds: float) -> None:
+        self._frame_seconds = frame_seconds
+        self._shown_at: deque[float] = deque()
+        self._input_delays: deque[tuple[float, int]] = deque()
+        self._server_frames: deque[tuple[float, int]] = deque()
+
+    def add(self, moment: float, sample: Mapping[str, Any], stepped: bool) -> None:
+        """A frame shown at ``moment`` (``time.perf_counter``), with the env's sample after it.
+
+        :param stepped: whether the env stepped for this frame; one that did not (the match
+            over) shows its server frame again on purpose.
+        """
+        self._shown_at.append(moment)
+        if stepped and sample.get("input_delay") is not None:
+            self._input_delays.append((moment, sample["input_delay"]))
+        if stepped and sample.get("server_frame") is not None:
+            self._server_frames.append((moment, sample["server_frame"]))
+        while self._shown_at[0] <= moment - 1.0:
+            self._shown_at.popleft()
+        for kept, seconds in ((self._input_delays, 1.0),
+                              (self._server_frames, SMOOTHNESS_SECONDS)):
+            while kept and kept[0][0] <= moment - seconds:
+                kept.popleft()
+
+    def lines(self, sample: Mapping[str, Any]) -> list[str]:
+        """The stats, a line each: the frame rate, and in a LAN match (``sample`` has the
+        client's state) the input delay, the frames shown twice or skipped, and the states of
+        the room and of the connection."""
+        gaps = np.diff(self._shown_at) if len(self._shown_at) > 1 else np.zeros(1)
+        lines = [f"{len(self._shown_at)} frames a second, the slowest {1000 * gaps.max():.0f} ms"]
+        if "client" not in sample:
+            return lines
+        if self._input_delays:
+            delay = float(np.mean([frames for _, frames in self._input_delays]))
+            lines.append(f"input delay {delay:.1f} frames "
+                         f"({1000 * delay * self._frame_seconds:.0f} ms)")
+        else:
+            lines.append("input delay: none measured yet")
+        steps = np.diff([number for _, number in self._server_frames]).astype(int)
+        lines.append(f"last {SMOOTHNESS_SECONDS:g} s, server frames shown twice: "
+                     f"{int((steps == 0).sum())}, skipped: {int((steps[steps > 1] - 1).sum())}")
+        lines.append(f"room {sample['room'] or '-'}, connection {sample['client']}")
+        return lines
+
+
+def stats_image(lines: Sequence[str], font: pygame.font.Font) -> pygame.Surface:
+    """``lines`` in white on a dark, see-through box, for the window's corner."""
+    texts = [font.render(line, True, (255, 255, 255)) for line in lines]
+    margin = max(1, font.get_height() // 3)
+    box = pygame.Surface((max(text.get_width() for text in texts) + 2 * margin,
+                          sum(text.get_height() for text in texts) + 2 * margin), pygame.SRCALPHA)
+    box.fill((0, 0, 0, 170))
+    top = margin
+    for text in texts:
+        box.blit(text, (margin, top))
+        top += text.get_height()
+    return box
 
 
 def caption(sample: Mapping[str, Any]) -> str:
@@ -261,6 +341,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     lan.add_argument("--seats", help="for the first to join: the cars players drive, such as "
                                      "blue1,orange1; with --team-size and --seconds, it sets the "
                                      "match (default: the room's)")
+    parser.add_argument("--stats", action="store_true",
+                        help="show the stats from the start: the frame rate, and in a LAN match "
+                             "the input delay and the frames shown twice or skipped (F3, or the "
+                             "controller's Back button, shows and hides them)")
     arguments = parser.parse_args(argv)
     width, height = arguments.window
     lan_settings: dict[str, Any] = {}
@@ -298,6 +382,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     if sdl_controller.get_count() and sdl_controller.is_controller(0):
         controller = sdl_controller.Controller(0)
     frame_seconds = 1 / env.metadata["render_fps"]
+    stats, is_showing_stats = PlayStats(frame_seconds), arguments.stats
+    stats_font = pygame.font.Font(None, max(16, height // 36))
+    stats_texture, stats_drawn_at = None, -math.inf
     playing = True
     frame_due = time.perf_counter()
     try:
@@ -316,6 +403,11 @@ def main(argv: Sequence[str] | None = None) -> None:
                 if (event.type == pygame.CONTROLLERDEVICEADDED and controller is None
                         and sdl_controller.is_controller(event.device_index)):
                     controller = sdl_controller.Controller(event.device_index)
+                if (event.type == pygame.KEYDOWN and event.key == STATS_KEY) or (
+                        event.type == pygame.CONTROLLERBUTTONDOWN
+                        and event.button == STATS_BUTTON):
+                    is_showing_stats = not is_showing_stats
+            stepped = playing
             if playing:
                 action = read_inputs(pygame.key.get_pressed(), pygame.mouse.get_pressed(),
                                      controller)
@@ -324,8 +416,16 @@ def main(argv: Sequence[str] | None = None) -> None:
             frame = env.render()
             image = pygame.image.frombuffer(frame.tobytes(), (frame.shape[1], frame.shape[0]), "RGB")
             Texture.from_surface(renderer, image).draw()
+            sample = env.sample()
+            if is_showing_stats:
+                if time.perf_counter() - stats_drawn_at >= STATS_REFRESH_SECONDS:
+                    stats_texture = Texture.from_surface(
+                        renderer, stats_image(stats.lines(sample), stats_font))
+                    stats_drawn_at = time.perf_counter()
+                stats_texture.draw(dstrect=(8, 8, stats_texture.width, stats_texture.height))
             renderer.present()
-            title = caption(env.sample())
+            stats.add(time.perf_counter(), sample, stepped)
+            title = caption(sample)
             if window.title != title:
                 window.title = title
             frame_due = wait_for(frame_due + frame_seconds)

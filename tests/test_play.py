@@ -6,8 +6,8 @@ import pygame
 import pytest
 
 from rocketsim_gym.controls import BUTTON_COUNT, AnalogInput, Button
-from rocketsim_gym.play import (_window_size, caption, lan_arguments, main, pad_inputs,
-                                pressed_buttons)
+from rocketsim_gym.play import (PlayStats, _window_size, caption, lan_arguments, main,
+                                pad_inputs, pressed_buttons, stats_image)
 
 NO_MOUSE = (False, False, False)
 
@@ -121,3 +121,33 @@ def test_the_title_of_a_lan_match_says_the_room_and_the_input_delay():
               "input_delay": 2}
     assert caption(sample) == "rocketsim-gym LAN (playing, input delay 2 frames): Esc quits"
     assert "Enter plays another match" in caption({**sample, "room": "stopped"})
+
+
+LAN_SAMPLE = {"client": "live", "room": "playing", "server_frame": 0, "input_delay": 3}
+
+
+def test_the_stats_count_frames_the_input_delay_and_server_frames_shown_twice_or_skipped():
+    stats, moment = PlayStats(1 / 60), 100.0
+    for index, number in enumerate([10, 11, 12, 12, 13, 15, 16]):
+        moment += 0.05 if index == 3 else 1 / 60
+        stats.add(moment, {**LAN_SAMPLE, "server_frame": number}, stepped=True)
+    assert stats.lines(LAN_SAMPLE) == [
+        "7 frames a second, the slowest 50 ms",
+        "input delay 3.0 frames (50 ms)",
+        "last 10 s, server frames shown twice: 1, skipped: 1",
+        "room playing, connection live"]
+
+
+def test_frames_shown_after_the_match_count_for_the_frame_rate_alone():
+    stats = PlayStats(1 / 60)
+    for index in range(3):
+        stats.add(1.0 + index / 60, {**LAN_SAMPLE, "server_frame": 5}, stepped=index == 0)
+    assert stats.lines(LAN_SAMPLE)[2].endswith("shown twice: 0, skipped: 0")
+    assert stats.lines({"phase": "play"}) == ["3 frames a second, the slowest 17 ms"]
+
+
+def test_the_stats_box_holds_every_line():
+    pygame.font.init()
+    font = pygame.font.Font(None, 20)
+    one, two = stats_image(["a line"], font), stats_image(["a line", "another, longer line"], font)
+    assert two.get_height() > one.get_height() and two.get_width() > one.get_width()

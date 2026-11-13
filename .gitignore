@@ -5,6 +5,8 @@ build/
 .venv/
 .pytest_cache/
 .ruff_cache/
+# Where rocketsim-server writes its match logs by default.
+matches/
 
 # Rocket League's own collision meshes, dumped on a PC with the game, are never committed:
 # no mesh file is, but the homemade arena's.

@@ -52,6 +52,8 @@ The keyboard and mouse follow Rocket League's PC defaults, each key a full press
 
 The score, the clock and your boost are on screen, as in Rocket League. Esc quits; when the match is over, Enter plays another.
 
+F3 (fn+F3 on most Mac keyboards), or the controller's Back button, shows and hides the stats in the window's corner: the frames shown a second and the slowest, and in a LAN match the input delay, the frames shown twice or skipped, and the state of the room and of the connection. `--stats` shows them from the start.
+
 ### Updating
 
 `uvx` keeps the version it downloaded. To play the latest one, run once:
