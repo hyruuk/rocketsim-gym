@@ -131,34 +131,28 @@ import hashlib, pickle, sys
 from rocketsim_gym.env import SoccarEnv
 with open(sys.argv[1], "rb") as file:
     played = pickle.load(file)
-try:
-    env = SoccarEnv(server="127.0.0.1:9", seat="blue1", seats=["blue1", "orange1"],
-                    match_seconds=20, render_mode="rgb_array", render_width=160,
-                    render_height=90)
-except RuntimeError:
-    print("no-opengl")
-    sys.exit()
+env = SoccarEnv(server="127.0.0.1:9", seat="blue1", seats=["blue1", "orange1"], match_seconds=20)
 env.replay_from(played["records"])
 env.reset()
-states, pixels = hashlib.sha256(), hashlib.sha256()
+digest = hashlib.sha256()
 for action in played["actions"]:
     observation = env.step(action)[0]
-    states.update(observation.tobytes() + repr(sorted(env.sample().items())).encode())
-    pixels.update(env.render().tobytes())
-print(states.hexdigest(), pixels.hexdigest())
+    digest.update(observation.tobytes() + repr(sorted(env.sample().items())).encode()
+                  + repr(env._view.contents()).encode())
+print(digest.hexdigest())
 """
 
 
 def test_two_players_see_one_match_and_each_redraws_from_its_records(server, tmp_path):
-    # Frames are compared between two fresh processes, as the renderer's own test does: a
-    # virtual machine's GPU (GitHub's macOS runners) can draw differently in a process that
-    # has drawn other frames before.
+    # A replay must give each step's observation, sample and contents (the scene and the
+    # on-screen display, or a notice), which the renderer draws as its own tests check: a GPU's
+    # pixels can differ between two runs of the same frames (GitHub's macOS runners' do).
     blue = _lan_env(server.port, "blue1", render=False)
     orange = _lan_env(server.port, "orange1", render=False)
     blue.reset()
     orange.reset()
     rng = np.random.default_rng(4)
-    played, states = {"records": [], "actions": []}, hashlib.sha256()
+    played, digest = {"records": [], "actions": []}, hashlib.sha256()
     # Each player's observation and room state, by the number of the server frame it showed.
     seen = {"blue1": {}, "orange1": {}}
 
@@ -171,7 +165,8 @@ def test_two_players_see_one_match_and_each_redraws_from_its_records(server, tmp
         if name == "blue1":
             played["records"].append(record)
             played["actions"].append(action)
-            states.update(observation.tobytes() + repr(sorted(env.sample().items())).encode())
+            digest.update(observation.tobytes() + repr(sorted(env.sample().items())).encode()
+                          + repr(env._view.contents()).encode())
         return terminated, truncated
 
     deadline = time.monotonic() + 30
@@ -195,15 +190,10 @@ def test_two_players_see_one_match_and_each_redraws_from_its_records(server, tmp
         env.close()
     with open(tmp_path / "played.pickle", "wb") as file:
         pickle.dump(played, file)
-    redraws = [subprocess.run([sys.executable, "-c", _REDRAW, str(tmp_path / "played.pickle")],
-                              capture_output=True, text=True) for _ in range(2)]
-    for redraw in redraws:
-        assert redraw.returncode == 0, redraw.stderr
-    if redraws[0].stdout.strip() == "no-opengl":
-        pytest.skip("no OpenGL 3.3 context to draw the frames")
-    first, second = (redraw.stdout.split() for redraw in redraws)
-    assert first[0] == states.hexdigest()
-    assert first == second
+    redraw = subprocess.run([sys.executable, "-c", _REDRAW, str(tmp_path / "played.pickle")],
+                            capture_output=True, text=True)
+    assert redraw.returncode == 0, redraw.stderr
+    assert redraw.stdout.strip() == digest.hexdigest()
 
 
 _WITHOUT_ROCKETSIM = """

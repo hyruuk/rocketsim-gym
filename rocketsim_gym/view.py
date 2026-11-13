@@ -17,7 +17,7 @@ import numpy as np
 
 from .arena_geometry import HOMEMADE_ARENA_FOLDER, collision_mesh_files, read_collision_mesh_file
 from .camera import CameraSettings, advance_rig, camera_view, start_rig
-from .hud import HudPainter, hud_for
+from .hud import Hud, HudPainter, hud_for
 from .match import Car
 from .renderer import CarPose, Renderer, Scene
 from .snapshot import Snapshot
@@ -101,27 +101,39 @@ class SoccarView:
                                     seconds, self._camera_settings)
         self._snapshot, self._notice, self._frame = snapshot, notice, None
 
-    def frame(self) -> np.ndarray:
-        """The frame of the latest snapshot or notice, ``(height, width, 3)`` RGB bytes with the
-        on-screen display, read-only; drawn once, however often it is asked for.
+    def contents(self) -> tuple[Scene, Hud] | Notice:
+        """What the frame of the latest snapshot or notice shows, before it is drawn: the scene
+        and the on-screen display over it, or a notice alone.
 
-        :raises ValueError: the view draws no frames, or has nothing to draw yet.
+        :raises ValueError: the view has nothing to show yet.
         """
-        if self._renderer is None:
-            raise ValueError("this view draws no frames")
-        if self._frame is not None:
-            return self._frame
         if self._snapshot is not None:
             car = self._snapshot.car(self.car)
             hud = hud_for(self._snapshot.match, car.boost, self.car)
             if self._notice is not None:
                 hud = dataclasses.replace(hud, banner=self._notice.banner, banner_team=None,
                                           caption=self._notice.caption)
-            self._frame = self._hud_painter.paint(self._renderer.draw(self._scene()), hud)
-        elif self._notice is not None:
-            self._frame = self._hud_painter.message(self._notice.banner, self._notice.caption)
+            return self._scene(), hud
+        if self._notice is not None:
+            return self._notice
+        raise ValueError("this view has nothing to show yet")
+
+    def frame(self) -> np.ndarray:
+        """The frame of the latest snapshot or notice, ``(height, width, 3)`` RGB bytes with the
+        on-screen display, read-only; drawn once, however often it is asked for.
+
+        :raises ValueError: the view draws no frames, or has nothing to show yet.
+        """
+        if self._renderer is None:
+            raise ValueError("this view draws no frames")
+        if self._frame is not None:
+            return self._frame
+        contents = self.contents()
+        if isinstance(contents, Notice):
+            self._frame = self._hud_painter.message(contents.banner, contents.caption)
         else:
-            raise ValueError("this view has nothing to draw yet")
+            scene, hud = contents
+            self._frame = self._hud_painter.paint(self._renderer.draw(scene), hud)
         self._frame.flags.writeable = False
         return self._frame
 
