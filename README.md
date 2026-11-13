@@ -70,33 +70,69 @@ uvx --refresh --from https://github.com/hyruuk/rocketsim-gym/archive/main.zip ro
 
 Several people, each at their own computer, can play one match together: any of 1v1 to 3v3, as teammates or opponents, with bots in the seats nobody takes. One computer runs a match server, which plays the match; every player's window sends its controls to it and shows the match from the player's own car. The computers need not be alike (a Mac and a Linux PC play together), but they need the same version of this package. Only the server needs RocketSim, so a player's computer can be one RocketSim does not support, such as an Intel Mac.
 
-**1. Start the server**, once, on a computer nobody plays on (its window takes typed commands):
+### A 1v1 on two computers
+
+One computer hosts the match and plays blue; the other joins it and plays orange. The commands are the same on macOS, Linux and Windows. A computer that has played an older version adds `--refresh` after `uvx` the first time, to fetch this one.
+
+**On the computer that hosts**
+
+1. If it has a firewall, let the game through:
+   - Ubuntu or Debian: `sudo ufw allow 47800:47801/udp && sudo ufw allow 47800/tcp` (with `ufw` inactive, as `sudo ufw status` says, there is nothing to do)
+   - Fedora: `sudo firewall-cmd --add-port=47800/tcp --add-port=47800-47801/udp`
+   - macOS 15 or later: in System Settings › Privacy & Security › Local Network, allow the terminal app you use
+   - Windows: allow it when the firewall asks, on a network set to Private
+2. Start the server in a terminal, and leave it running:
+
+   ```bash
+   uvx --from https://github.com/hyruuk/rocketsim-gym/archive/main.zip rocketsim-server
+   ```
+
+   It prints this computer's address, in a line such as `players join with: rocketsim-play --join 192.168.1.20:47800`. On a Mac, put `caffeinate -i ` in front of the command, so that the Mac does not doze.
+3. Join as blue, in a second terminal:
+
+   ```bash
+   uvx --from https://github.com/hyruuk/rocketsim-gym/archive/main.zip rocketsim-play --join 127.0.0.1:47800 --seats blue1,orange1 --seat blue1
+   ```
+
+   A window opens, waiting for orange.
+
+**On the computer that joins**, with the address the server printed in place of `HOST_ADDRESS`:
 
 ```bash
-uvx --from https://github.com/hyruuk/rocketsim-gym/archive/main.zip rocketsim-server
+uvx --from https://github.com/hyruuk/rocketsim-gym/archive/main.zip rocketsim-play --join HOST_ADDRESS:47800 --seats blue1,orange1 --seat orange1
 ```
 
-It prints how players join it, such as `rocketsim-play --join 192.168.1.20:47800`, and keeps a log of each match in `matches/`. On a Mac, run it as `caffeinate -i rocketsim-server ...`, so that the Mac does not doze.
+The first run downloads the game, in a minute or so. As soon as both players are in, the countdown starts on both screens. After a match, Enter in both windows plays another.
 
-**2. Join**, at each player's computer. The first player sets the match: `--seats` names the cars people drive, the others go to bots, and `--seat` is your own:
+### More players
+
+The first player to join sets the match: `--team-size` and `--seconds` as on a single computer, `--seats` the cars people drive (bots drive the others), and `--seat` their own. For a 2v2 with both players on blue against two bots:
 
 ```bash
-uvx --from https://github.com/hyruuk/rocketsim-gym/archive/main.zip rocketsim-play --join --team-size 2 --seats blue1,blue2 --seat blue1
+uvx --from https://github.com/hyruuk/rocketsim-gym/archive/main.zip rocketsim-play --join HOST_ADDRESS:47800 --team-size 2 --seats blue1,blue2 --seat blue1
 ```
 
-The others join the room's match with `--join` alone, taking the first free seat, or the one `--seat` names. `--join` finds the server on the network by itself; where the network does not let it, give the address the server printed: `--join 192.168.1.20:47800`. Each player shows a waiting screen until everyone has joined; then the countdown starts for all.
+The others join that match with `--join HOST_ADDRESS:47800` alone, taking the first free seat, or the one `--seat` names. Without an address, `--join` looks for the server on the network by itself, where the network lets it. Each player sees a waiting screen until everyone is in.
 
-**While a match is on**, the server's window takes these commands:
+### The server's commands
 
-- `status`: who is in which seat, and how late each player's controls arrive.
-- `pause`, and `resume`: a player whose computer drops out (it closes, or stops answering for 2 s) pauses the match for everyone, and `resume` goes on once everyone is back. A player rejoins by starting `rocketsim-play --join --seat SEAT` again.
+While a match is on, the server's terminal takes these:
+
+- `status`: who is in which seat, and how many frames each player's controls take to arrive.
+- `pause`, and `resume`: a player whose computer drops out (its window closes, or it stops answering for 2 s) pauses the match for everyone. That player starts the same join command again, and `resume` goes on once everyone is back.
 - `bot SEAT`: a bot drives that seat to the end of the match.
 - `end`: the match ends now.
 - `quit`: the server stops.
 
-**On the network:** wired is best; Wi-Fi works, with occasional hiccups. The first time, each computer may ask to let the game through its firewall: allow it. On macOS 15 or later, also allow the terminal app in System Settings › Privacy & Security › Local Network; without it, nothing reaches the other computers, although `ping` does. On Windows, the network must be a Private one. On Linux with `ufw`, open the server's ports: `sudo ufw allow 47800:47801/udp && sudo ufw allow 47800/tcp`. Some networks (campus Wi-Fi often) keep computers from reaching each other at all; a home router or a cable between the two computers then does.
+Its console takes the keyboard, so for real sessions it belongs on a computer nobody plays on. Each match's log goes to `matches/`, with every player's controls, step by step; `rocketsim_gym.lan.match_log.replay_match(path)` plays it again and checks that it gives the same match, which it does on the server's computer.
 
-A player's controls take about one frame longer to show than on their own computer, and the server applies every one of them in order, so a quick tap is never lost. Each match's log has every player's controls, step by step; `rocketsim_gym.lan.match_log.replay_match(path)` plays it again and checks that it gives the same match, which it does on the server's computer.
+### If it does not connect
+
+- **"nothing answers" or "no answer within 3 s"**: the server is not running at that address, or the network keeps the computers apart, as campus and guest Wi-Fi often do; `ping HOST_ADDRESS` from the joining computer tells which. A home router, a phone hotspot or a cable between the two computers then does.
+- **The host's match pauses at once, and the other player stays on "Joining the match"**: the join got through, but the game's own traffic (UDP) does not reach the host. Its firewall drops it (see step 1 above), or, on a computer an institution manages, security software (Cisco Secure Client, for one) does, whatever you allow. Then let the other computer host.
+- **"no OpenGL 3.3 context"**: see "If it does not start" above.
+
+Wired is best; Wi-Fi works, with occasional hiccups. A player's controls take a frame or two longer to show than on their own computer, and the server applies every one of them in order, so a quick tap is never lost.
 
 ## Status
 
