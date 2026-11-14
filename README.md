@@ -54,6 +54,8 @@ The keyboard and mouse follow Rocket League's PC defaults, each key a full press
 
 The score, the clock and your boost are on screen, as in Rocket League. Esc (or the controller's Start) opens the menu: against bots it pauses the match, and from it you go back to the match, leave it, or quit. When the match is over, Enter plays another and Esc goes back to the start menu.
 
+F3 (fn+F3 on most Mac keyboards), or the controller's Back button, shows and hides the stats in the window's corner: the frames shown a second and the slowest, and in a LAN match the input delay, the frames shown twice or skipped, and the state of the room and of the connection. `--stats` shows them from the start.
+
 Every button can be bound anew, to a key, a mouse button or a controller button, in **Settings › Controls**: choose the action, then press what should hold it. Each action takes one keyboard-or-mouse binding and one controller binding, so you can, say, put air roll on the controller's bumpers. The controller's triggers and left stick always drive, reverse and steer.
 
 ### Settings
@@ -65,8 +67,6 @@ Flags set the same things for one run, without saving them, for example `--windo
 In fullscreen, the frames are drawn the screen's shape at most 1080 pixels tall, and the screen scales them up: taller frames take longer to draw than a frame lasts on a laptop's graphics. `--resolution 2560x1440` (or Settings › Display) draws them bigger.
 
 **For experiments**, `--experiment` runs from the flags alone, the same on every computer: no menu, no settings file (unless `--settings` names one, which is then only read, never written), a 1280x720 window unless `--fullscreen` or `--window` says otherwise, frames of the window's size unless `--resolution`, and Esc quits. For example, `rocketsim-play --experiment --seconds 300 --input digital --fullscreen`.
-
-F3 (fn+F3 on most Mac keyboards), or the controller's Back button, shows and hides the stats in the window's corner: the frames shown a second and the slowest, and in a LAN match the input delay, the frames shown twice or skipped, and the state of the room and of the connection. `--stats` shows them from the start.
 
 ### Updating
 
