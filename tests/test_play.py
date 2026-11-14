@@ -5,9 +5,10 @@ from collections import defaultdict
 import pygame
 import pytest
 
-from rocketsim_gym.controls import BUTTON_COUNT, AnalogInput, Button
-from rocketsim_gym.play import (PlayStats, _window_size, caption, lan_arguments, main,
-                                pad_inputs, pressed_buttons, stats_image)
+from rocketsim_gym.controls import BUTTON_COUNT, AnalogInput, Button, InputMode
+from rocketsim_gym.play import (PlayStats, _window_size, apply_flags, caption, lan_arguments,
+                                main, pad_inputs, parser, pressed_buttons, stats_image)
+from rocketsim_gym.settings import Bindings, PlaySettings
 
 NO_MOUSE = (False, False, False)
 
@@ -151,3 +152,59 @@ def test_the_stats_box_holds_every_line():
     font = pygame.font.Font(None, 20)
     one, two = stats_image(["a line"], font), stats_image(["a line", "another, longer line"], font)
     assert two.get_height() > one.get_height() and two.get_width() > one.get_width()
+def test_a_rebound_button_is_read_from_its_new_key_and_controller_button():
+    bindings = Bindings().bind(Button.JUMP, "key:space").bind(Button.JUMP, "pad:rightshoulder")
+    resolved = bindings.resolve()
+    assert Button.JUMP in held(pressed_buttons(keys(pygame.K_SPACE), NO_MOUSE, None, resolved))
+    assert Button.JUMP not in held(pressed_buttons(keys(), (False, False, True), None, resolved))
+    controller = FakeController(buttons=(pygame.CONTROLLER_BUTTON_RIGHTSHOULDER,))
+    assert pad_inputs(keys(), NO_MOUSE, controller, resolved)[AnalogInput.JUMP] == 1.0
+    assert pad_inputs(keys(), NO_MOUSE, FakeController(buttons=(pygame.CONTROLLER_BUTTON_A,)),
+                      resolved)[AnalogInput.JUMP] == 0.0
+
+
+def test_a_controller_button_bound_to_a_stick_direction_pushes_the_stick():
+    resolved = Bindings().bind(Button.STICK_LEFT, "pad:dpleft").resolve()
+    controller = FakeController(buttons=(pygame.CONTROLLER_BUTTON_DPAD_LEFT,))
+    assert pad_inputs(keys(), NO_MOUSE, controller, resolved)[AnalogInput.STICK_X] == -1.0
+
+
+def flags(*argv):
+    return parser().parse_args(argv)
+
+
+def test_flags_override_the_settings_for_one_run():
+    settings = PlaySettings(fullscreen=True).replace(camera={"field_of_view": 100.0})
+    session = apply_flags(settings, flags("--distance", "300", "--input", "digital"))
+    assert session.camera.field_of_view == 100.0 and session.camera.distance == 300.0
+    assert session.input_mode is InputMode.DIGITAL and session.fullscreen
+    assert apply_flags(settings, flags()) == settings
+
+
+def test_a_window_size_alone_means_a_window():
+    assert not apply_flags(PlaySettings(), flags("--window", "800x450")).fullscreen
+    assert apply_flags(PlaySettings(), flags("--window", "800x450", "--fullscreen")).fullscreen
+    assert not apply_flags(PlaySettings(), flags("--windowed")).fullscreen
+
+
+def test_the_resolution_flag_takes_auto_or_a_size():
+    settings = PlaySettings(resolution=(800, 600))
+    assert apply_flags(settings, flags("--resolution", "auto")).resolution is None
+    assert apply_flags(settings, flags("--resolution", "1920x1080")).resolution == (1920, 1080)
+
+
+def test_a_wrong_settings_file_stops_the_window_before_it_opens(tmp_path, capsys):
+    path = tmp_path / "settings.toml"
+    path.write_text("[camera]\nfield_of_view = 500\n")
+    with pytest.raises(SystemExit):
+        main(["--settings", str(path), "--no-menu"])
+    assert str(path) in capsys.readouterr().err
+
+
+def test_seats_that_make_no_match_stop_the_window_before_it_opens(capsys):
+    with pytest.raises(SystemExit):
+        main(["--join", "127.0.0.1:47999", "--seats", "blue1,purple1"])
+    assert "seats" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        main(["--join", "127.0.0.1:47999", "--seats", "blue1", "--seat", "orange1"])
+    assert "--seat orange1" in capsys.readouterr().err

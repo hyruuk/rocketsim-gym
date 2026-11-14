@@ -31,7 +31,9 @@ Then close the terminal and open a new one, so that it finds `uv`.
 uvx --from https://github.com/hyruuk/rocketsim-gym/archive/main.zip rocketsim-play
 ```
 
-A window opens on a 5-minute 1v1 match against a bot. The first start downloads what the game needs and takes a minute or so; later ones take seconds. If the window opens behind the terminal, click it. Add `--team-size 2` at the end for 2v2 or `--team-size 3` for 3v3, with bots for your teammates and your opponents, `--seconds 120` for a shorter match, or `--window 1920x1080` for a bigger window. Rocket League players can bring their own camera and controller settings, in the game's units, for example `--field-of-view 110 --distance 270 --height 100 --angle -3 --stiffness 0.45 --transition-speed 1.2 --deadzone 0.05 --steering-sensitivity 1.3 --aerial-sensitivity 1.3`.
+The game opens fullscreen on its start menu: play against bots (1v1 to 3v3, any length), host or join a match on the local network, or change the settings. The first start downloads what the game needs and takes a minute or so; later ones take seconds. F11 switches between fullscreen and a window at any time. The menu works with the arrow keys, Enter and Esc, with the mouse, or with a controller (D-pad or stick, A, B).
+
+To skip the menu, add `--no-menu` at the end for a 5-minute 1v1 against a bot, or say what match you want: `--team-size 2` for 2v2 or `--team-size 3` for 3v3, with bots for your teammates and your opponents, `--seconds 120` for a shorter match.
 
 It runs on a Mac with Apple silicon (M1 or later, macOS 14 or later), on 64-bit Windows 10 or 11, and on Linux (x86_64 or ARM64), with graphics that support OpenGL 3.3, as any computer from the last ten years does. Intel Macs cannot run it: RocketSim publishes no version for them.
 
@@ -50,7 +52,19 @@ The keyboard and mouse follow Rocket League's PC defaults, each key a full press
 | Ball cam on or off | Space | Y |
 | Air roll left / right | Q / E | |
 
-The score, the clock and your boost are on screen, as in Rocket League. Esc quits; when the match is over, Enter plays another.
+The score, the clock and your boost are on screen, as in Rocket League. Esc (or the controller's Start) opens the menu: against bots it pauses the match, and from it you go back to the match, leave it, or quit. When the match is over, Enter plays another and Esc goes back to the start menu.
+
+Every button can be bound anew, to a key, a mouse button or a controller button, in **Settings › Controls**: choose the action, then press what should hold it. Each action takes one keyboard-or-mouse binding and one controller binding, so you can, say, put air roll on the controller's bumpers. The controller's triggers and left stick always drive, reverse and steer.
+
+### Settings
+
+**Settings** in the menu holds the display (fullscreen, the frames' resolution, the window's size, vsync), Rocket League's camera and controller settings in the game's own units, and the controls. They are saved as you change them, in a file you can also edit (the menu's Settings screen says where: `~/.config/rocketsim-gym/settings.toml` on Linux, `~/Library/Application Support/rocketsim-gym/` on macOS, `%APPDATA%\rocketsim-gym\` on Windows), and apply from the next match.
+
+Flags set the same things for one run, without saving them, for example `--windowed --window 1920x1080`, or a Rocket League player's own camera and controller settings: `--field-of-view 110 --distance 270 --height 100 --angle -3 --stiffness 0.45 --transition-speed 1.2 --deadzone 0.05 --steering-sensitivity 1.3 --aerial-sensitivity 1.3`. `--settings FILE` uses another settings file, `--list-controllers` lists the controllers the game sees, and `rocketsim-play --help` lists everything.
+
+In fullscreen, the frames are drawn the screen's shape at most 1080 pixels tall, and the screen scales them up: taller frames take longer to draw than a frame lasts on a laptop's graphics. `--resolution 2560x1440` (or Settings › Display) draws them bigger.
+
+**For experiments**, `--experiment` runs from the flags alone, the same on every computer: no menu, no settings file (unless `--settings` names one, which is then only read, never written), a 1280x720 window unless `--fullscreen` or `--window` says otherwise, frames of the window's size unless `--resolution`, and Esc quits. For example, `rocketsim-play --experiment --seconds 300 --input digital --fullscreen`.
 
 F3 (fn+F3 on most Mac keyboards), or the controller's Back button, shows and hides the stats in the window's corner: the frames shown a second and the slowest, and in a LAN match the input delay, the frames shown twice or skipped, and the state of the room and of the connection. `--stats` shows them from the start.
 
@@ -72,9 +86,18 @@ uvx --refresh --from https://github.com/hyruuk/rocketsim-gym/archive/main.zip ro
 
 Several people, each at their own computer, can play one match together: any of 1v1 to 3v3, as teammates or opponents, with bots in the seats nobody takes. One computer runs a match server, which plays the match; every player's window sends its controls to it and shows the match from the player's own car. The computers need not be alike (a Mac and a Linux PC play together), but they need the same version of this package. Only the server needs RocketSim, so a player's computer can be one RocketSim does not support, such as an Intel Mac.
 
-### A 1v1 on two computers
+### From the menu
 
-One computer hosts the match and plays blue; the other joins it and plays orange. The commands are the same on macOS, Linux and Windows. A computer that has played an older version adds `--refresh` after `uvx` the first time, to fetch this one.
+1. On the computer that hosts, let the game through its firewall, if it has one (step 1 below), and choose **Host a LAN match**: the team size, the length, how many people play (bots take the other seats) and your car, then **Start hosting**. The window starts the match server and joins it; the bottom of the screen says the address others join at.
+2. On each other computer, choose **Join a LAN match**: the servers on the network are listed, with their free seats. Choose one, then your car. If the network keeps the server from being listed, **Enter an address** takes the one the host's screen shows.
+
+The match starts once every player is in. The host's menu (Esc) can also resume a match paused because a player dropped out, once they are back, or end it for everyone. Leaving the match, or quitting, stops the server.
+
+A computer that has played an older version adds `--refresh` after `uvx` the first time, so that every computer plays the same version.
+
+### A 1v1 on two computers, from the command line
+
+One computer hosts the match and plays blue; the other joins it and plays orange. The commands are the same on macOS, Linux and Windows. This way, the server runs in its own terminal, where its commands (below) are typed, and it keeps running between matches.
 
 **On the computer that hosts**
 
@@ -132,6 +155,7 @@ Its console takes the keyboard, so for real sessions it belongs on a computer no
 
 - **"nothing answers" or "no answer within 3 s"**: the server is not running at that address, or the network keeps the computers apart, as campus and guest Wi-Fi often do; `ping HOST_ADDRESS` from the joining computer tells which. A home router, a phone hotspot or a cable between the two computers then does.
 - **The host's match pauses at once, and the other player stays on "Joining the match"**: the join got through, but the game's own traffic (UDP) does not reach the host. Its firewall drops it (see step 1 above), or, on a computer an institution manages, security software (Cisco Secure Client, for one) does, whatever you allow. Then let the other computer host.
+- **"a server is already running on this computer"**, on Host a LAN match: a `rocketsim-server` started from a terminal holds the port; join it with Join a LAN match instead, or stop it.
 - **"no OpenGL 3.3 context"**: see "If it does not start" above.
 
 Wired is best; Wi-Fi works, with occasional hiccups. A player's controls take a frame or two longer to show than on their own computer, and the server applies every one of them in order, so a quick tap is never lost.
@@ -238,7 +262,9 @@ RocketSim simulates Rocket League's physics but needs the arena's collision mesh
 - `rocketsim_gym.camera`: car cam and ball cam, the rig behind the car that follows it.
 - `rocketsim_gym.renderer`: draws the frames offscreen with OpenGL (moderngl): the arena the physics uses, the ball, the cars and the boost pads.
 - `rocketsim_gym.hud`: the on-screen display, what it shows at each moment of a match and how it is painted.
-- `rocketsim-play` (`python -m rocketsim_gym.play`): the play window.
+- `rocketsim-play` (`python -m rocketsim_gym.play`): the play window: its flags, the loop that shows the menus or the match, reading the inputs through the player's bindings, and the server it starts when it hosts.
+- `rocketsim_gym.menu`: the start menu and the pause menu, as screens of rows driven by commands (no window, for testing), and their painter.
+- `rocketsim_gym.settings`: the player's settings (display, camera, controller, bindings), the file that keeps them, and where it is on each platform.
 - `rocketsim_gym.engine`: `load_rocketsim(folder, manifest)` loads RocketSim with one folder of meshes per process, after checking every file against its manifest; `SoccarArena` is a soccar arena of one car a team or more, placed only by setting state and stepped a tick at a time, each tick's goal, touches and demolitions reported.
 - `rocketsim_gym.arena_geometry`: the homemade arena as one triangle mesh (`build_homemade_soccar_arena`), and RocketSim's collision-mesh files: read, write, their SHA-256 manifest, and RocketSim's own mesh hash. RocketSim adds the floor, a ceiling plane and the side walls itself; the mesh is everything else (the curves into the walls and the ceiling, corner and back walls, the ceiling, the goals). `python -m rocketsim_gym.arena_geometry FOLDER` writes it, as `rocketsim_gym/collision_meshes/homemade/` holds it.
 - `python -m rocketsim_gym.check_collision_meshes FOLDER`: describes each mesh file, loads the folder, measures how the arena plays (rest heights, a shot at each goal, a drive up a wall), and writes the folder's manifest and a report.
